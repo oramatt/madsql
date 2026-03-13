@@ -64,9 +64,9 @@ jobs:
             pyinstaller_target_arch: arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.python_arch }}
@@ -130,7 +130,7 @@ jobs:
           Compress-Archive -LiteralPath "dist\${{ matrix.binary_name }}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.meta.outputs.archive_name }}
           path: ${{ runner.temp }}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}
@@ -142,11 +142,19 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: release-assets
           merge-multiple: true
+
+      - name: Inspect downloaded assets
+        shell: bash
+        run: |
+          ls -la release-assets
 
       - name: Generate checksums
         shell: bash
