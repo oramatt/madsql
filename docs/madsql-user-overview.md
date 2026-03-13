@@ -317,6 +317,9 @@ python3 -m madsql <command>
 
 # [fit] Get Started!
 
+Download the binary:
+[https://github.com/oramatt/madsql/releases](https://github.com/oramatt/madsql/releases)
+
 Repository quick start:
 
 ```bash
@@ -324,6 +327,7 @@ git clone https://github.com/oramatt/madsql.git
 pip install -e .
 madsql --version
 ```
+
 
 Core idea:
 
