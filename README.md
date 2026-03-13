@@ -16,6 +16,14 @@ creation DDL from SQL workloads using SQLGlot.
 
 ------------------------------------------------------------------------
 
+## Download a release
+[https://github.com/oramatt/madsql/releases](https://github.com/oramatt/madsql/releases)
+
+Support for macOS, Linux, Windows (arm64 and x86_64)
+
+
+------------------------------------------------------------------------
+
 ## Installation (Development)
 
 ``` bash
