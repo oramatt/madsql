@@ -9,10 +9,10 @@ creation DDL from SQL workloads using SQLGlot.
 ## Shipped Features
 
 - `dialects` for listing supported SQLGlot dialects
-- `--version` for runtime and dependency version details
 - `convert` for SQL dialect conversion
 - `split-statements` for deterministic statement splitting
 - `infer-schema` for standalone schema inference and DDL or JSON output
+- `--version` for runtime and dependency version details
 
 ------------------------------------------------------------------------
 
