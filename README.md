@@ -1,4 +1,4 @@
-# madsql
+# madsql🤬
 
 madsql is a deterministic command-line tool for converting SQL scripts
 between dialects, splitting multi-statement SQL, and inferring
