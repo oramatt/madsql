@@ -17,6 +17,7 @@ env:
   APP_NAME: madsql
   PYTHON_VERSION: "3.12"
   PYINSTALLER_VERSION: "6.17.0"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -122,52 +123,41 @@ jobs:
         shell: bash
         run: |
           tar -C dist -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "${{ matrix.binary_name }}"
+          shasum -a 256 "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" > "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz.sha256"
 
       - name: Archive binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Compress-Archive -LiteralPath "dist\${{ matrix.binary_name }}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
+          $hash = (Get-FileHash "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ steps.meta.outputs.archive_name }}.zip" | Set-Content -NoNewline "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip.sha256"
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.meta.outputs.archive_name }}
-          path: ${{ runner.temp }}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}
+          path: |
+            ${{ runner.temp }}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}
+            ${{ runner.temp }}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}.sha256
           if-no-files-found: error
           retention-days: 14
 
-  publish:
-    name: Publish GitHub release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          path: release-assets
-          merge-multiple: true
-
-      - name: Inspect downloaded assets
-        shell: bash
-        run: |
-          ls -la release-assets
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS.txt
-
-      - name: Create or update release
+      - name: Publish archive to GitHub release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
-          fi
-          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber
+          archive_path="${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}"
+          checksum_path="${archive_path}.sha256"
+
+          for _ in 1 2 3; do
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              break
+            fi
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes >/dev/null 2>&1 || true
+            sleep 2
+          done
+
+          gh release upload "${GITHUB_REF_NAME}" "$archive_path" "$checksum_path" --clobber
