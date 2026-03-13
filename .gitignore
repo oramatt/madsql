@@ -30,3 +30,4 @@ htmlcov/
 .idea/
 .vscode/
 examples/output/
+/local_push_release.sh
