@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "madsql"
+version = "0.11.0"
+description = "Deterministic CLI SQL dialect transcoding with SQLGlot."
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = [
+  "sqlglot==29.0.1",
+  "sqlparse==0.5.3",
+]
+
+[project.scripts]
+madsql = "madsql.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["madsql*"]

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "tsql_top_to_postgres_limit",
+    "source": "tsql",
+    "target": "postgres",
+    "input": "SELECT TOP 3 [name] FROM dbo.users;",
+    "expected": "SELECT \"name\" FROM dbo.users LIMIT 3\n"
+  },
+  {
+    "name": "mysql_ifnull_to_spark_coalesce",
+    "source": "mysql",
+    "target": "spark",
+    "input": "SELECT `name`, IFNULL(age, 0) FROM users LIMIT 5;",
+    "expected": "SELECT `name`, COALESCE(age, 0) FROM users LIMIT 5\n"
+  },
+  {
+    "name": "spark_posexplode_to_duckdb",
+    "source": "spark",
+    "target": "duckdb",
+    "input": "SELECT posexplode(array(10, 20));",
+    "expected": "SELECT GENERATE_SUBSCRIPTS([10, 20], 1) - 1 AS pos, UNNEST([10, 20]) AS col\n"
+  },
+  {
+    "name": "oracle_nvl_to_postgres_coalesce",
+    "source": "oracle",
+    "target": "postgres",
+    "input": "SELECT NVL(name, 'unknown') FROM dual;",
+    "expected": "SELECT COALESCE(name, 'unknown') FROM dual\n"
+  }
+]

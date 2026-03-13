@@ -1,0 +1,34 @@
+[
+  {
+    "name": "postgres_distinct_on_missing_paren",
+    "source": "postgres",
+    "target": "mysql",
+    "input": "SELECT DISTINCT ON (id FROM users;",
+    "expected_error_type": "parse_error",
+    "expected_message_contains": "Expecting )"
+  },
+  {
+    "name": "tsql_top_missing_expression",
+    "source": "tsql",
+    "target": "postgres",
+    "input": "SELECT TOP FROM foo;",
+    "expected_error_type": "parse_error",
+    "expected_message_contains": "Required keyword: 'expression' missing"
+  },
+  {
+    "name": "bigquery_unnest_missing_closer",
+    "source": "bigquery",
+    "target": "postgres",
+    "input": "SELECT * FROM UNNEST([1, 2];",
+    "expected_error_type": "parse_error",
+    "expected_message_contains": "Expecting )"
+  },
+  {
+    "name": "snowflake_iff_missing_paren",
+    "source": "snowflake",
+    "target": "postgres",
+    "input": "SELECT IFF(a > 0, 1, 0 FROM t;",
+    "expected_error_type": "parse_error",
+    "expected_message_contains": "Expecting )"
+  }
+]

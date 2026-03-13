@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: madsql
+  PYTHON_VERSION: "3.12"
+  PYINSTALLER_VERSION: "6.17.0"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+            python_arch: x64
+            binary_name: madsql
+            archive_ext: tar.gz
+            pyinstaller_target_arch: ""
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            python_arch: arm64
+            binary_name: madsql
+            archive_ext: tar.gz
+            pyinstaller_target_arch: ""
+          - runner: windows-2025
+            target: windows-x86_64
+            python_arch: x64
+            binary_name: madsql.exe
+            archive_ext: zip
+            pyinstaller_target_arch: ""
+          - runner: windows-11-arm
+            target: windows-arm64
+            python_arch: arm64
+            binary_name: madsql.exe
+            archive_ext: zip
+            pyinstaller_target_arch: ""
+          - runner: macos-15-intel
+            target: macos-x86_64
+            python_arch: x64
+            binary_name: madsql
+            archive_ext: tar.gz
+            pyinstaller_target_arch: x86_64
+          - runner: macos-15
+            target: macos-arm64
+            python_arch: arm64
+            binary_name: madsql
+            archive_ext: tar.gz
+            pyinstaller_target_arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.python_arch }}
+          cache: pip
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          else
+            release_tag="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          archive_name="${APP_NAME}-${release_tag}-${{ matrix.target }}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "pyinstaller==${PYINSTALLER_VERSION}"
+
+      - name: Build standalone binary
+        shell: bash
+        run: |
+          pyinstaller_args=(
+            --noconfirm
+            --clean
+            --onefile
+            --name "${APP_NAME}"
+            --paths src
+            --collect-all sqlglot
+            --collect-all sqlparse
+            src/madsql/__main__.py
+          )
+
+          if [[ -n "${{ matrix.pyinstaller_target_arch }}" ]]; then
+            pyinstaller_args+=(--target-arch "${{ matrix.pyinstaller_target_arch }}")
+          fi
+
+          python -m PyInstaller "${pyinstaller_args[@]}"
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          "./dist/${{ matrix.binary_name }}" --version
+          "./dist/${{ matrix.binary_name }}" dialects >/dev/null
+
+      - name: Archive binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tar -C dist -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "${{ matrix.binary_name }}"
+
+      - name: Archive binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath "dist\${{ matrix.binary_name }}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.archive_name }}
+          path: ${{ runner.temp }}/${{ steps.meta.outputs.archive_name }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber
