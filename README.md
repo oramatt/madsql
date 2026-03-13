@@ -29,36 +29,6 @@ After installation, the `madsql` command is available as a console script.
 
 ------------------------------------------------------------------------
 
-## Binary Releases
-
-GitHub Actions can build standalone PyInstaller binaries for:
-
-- `macOS x86_64`
-- `macOS arm64`
-- `Windows x86_64`
-- `Windows arm64`
-- `Linux x86_64`
-- `Linux arm64`
-
-The release workflow lives at `.github/workflows/release.yml`.
-
-To publish binary assets to GitHub Releases:
-
-``` bash
-git tag v0.11.0
-git push origin v0.11.0
-```
-
-That tag starts the release workflow, builds one native binary per target,
-packages each binary into a `.tar.gz` or `.zip`, generates `SHA256SUMS.txt`,
-and uploads all assets to the matching GitHub Release.
-
-You can also run the workflow manually with `workflow_dispatch` to verify the
-build matrix without publishing a GitHub Release. Manual runs upload the
-archives as workflow artifacts using a `manual-<run-number>` suffix.
-
-------------------------------------------------------------------------
-
 ## Verification
 
 Before pushing the repository or cutting a release, run the same checks used
