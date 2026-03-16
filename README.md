@@ -367,7 +367,7 @@ madsql infer-schema --source singlestore --target oracle --create-user --create-
 Render input `CREATE SCHEMA` / `CREATE DATABASE` statements directly for Oracle as `CREATE USER` plus grants:
 
 ``` bash
-printf 'CREATE SCHEMA analytics; CREATE DATABASE reporting;' | madsql infer-schema --source postgres --target oracle --create-user-password ChangeMe123
+echo 'CREATE SCHEMA analytics; CREATE DATABASE reporting;' | madsql infer-schema --source postgres --target oracle --create-user-password ChangeMe123
 ```
 
 Write structured errors, a timestamped log, and a markdown report:
