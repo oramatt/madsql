@@ -48,6 +48,8 @@ def convert_sql(
                     statement_index=1,
                     error_type="parse_error",
                     message=str(exc),
+                    statement_type="UNPARSED",
+                    statement_sql=sql,
                 )
             ],
         )
@@ -79,6 +81,8 @@ def convert_sql(
                     statement_index=statement_index,
                     error_type="convert_error",
                     message=str(exc),
+                    statement_type=statement_type,
+                    statement_sql=_safe_statement_sql(expression, dialect=source),
                 )
             )
 
@@ -128,6 +132,8 @@ def split_sql(
                     statement_index=1,
                     error_type="parse_error",
                     message=str(parse_exc),
+                    statement_type="UNPARSED",
+                    statement_sql=sql,
                 )
             ],
             engine_used="sqlglot",
@@ -163,6 +169,8 @@ def split_sql(
                     statement_index=statement_index,
                     error_type="split_error",
                     message=str(exc),
+                    statement_type=statement_type,
+                    statement_sql=_safe_statement_sql(expression, dialect=source),
                 )
             )
 
@@ -181,6 +189,15 @@ def _statement_type(expression: Expression) -> str:
             return f"CREATE {kind.upper()}"
         return "CREATE"
     return expression.key.upper()
+
+
+def _safe_statement_sql(expression: Expression, *, dialect: str | None) -> str | None:
+    try:
+        if dialect:
+            return expression.sql(dialect=dialect)
+        return expression.sql()
+    except Exception:  # pragma: no cover
+        return None
 
 
 def _split_with_sqlparse(sql: str) -> list[str]:

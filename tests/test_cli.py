@@ -939,7 +939,9 @@ WHERE n.id = 1;
             self.assertIn("tables_inferred: 1", log_payload)
             self.assertIn("# madsql Infer Schema Report", report_payload)
             self.assertIn("- Command Type: `infer-schema`", report_payload)
+            self.assertIn("- Invoked Command: `madsql infer-schema", report_payload)
             self.assertIn("- Output Format: `ddl`", report_payload)
+            self.assertIn("- Output Files Written: `1`", report_payload)
             self.assertIn("## Version Information", report_payload)
             self.assertIn(f"- madsql: `{MADSQL_VERSION}`", report_payload)
 
@@ -1663,8 +1665,9 @@ SELECT id FROM analytics.orders;
             reports = sorted((root / "split").glob("*-madsql-split-statements-report.md"))
             self.assertEqual(len(reports), 1)
             payload = reports[0].read_text(encoding="utf-8")
-            self.assertIn("# madsql Run Report", payload)
+            self.assertIn("# madsql Split Statements Report", payload)
             self.assertIn("- Command Type: `split-statements`", payload)
+            self.assertIn("- Invoked Command: `madsql split-statements", payload)
             self.assertIn("- Source Dialect: `n/a`", payload)
             self.assertIn("- Success Rate: `1/1 (100.0%)`", payload)
             self.assertIn("## Version Information", payload)
@@ -1866,6 +1869,12 @@ SELECT id FROM analytics.orders;
             self.assertEqual(len(reports), 1)
             report_path = reports[0]
             report = report_path.read_text(encoding="utf-8")
+            self.assertIn("# madsql Convert Report", report)
+            self.assertIn("- Command Type: `convert`", report)
+            self.assertIn("- Invoked Command: `madsql convert", report)
+            self.assertIn("- Successful Inputs: `1`", report)
+            self.assertIn("- Failed Inputs: `0`", report)
+            self.assertIn("- Success Rate: `1/1 (100.0%)`", report)
             self.assertIn("- Conversion Rate: `6/6 (100.0%)`", report)
             self.assertIn("| `SELECT` | 1 | 1 | 0 |", report)
             self.assertIn("| `INSERT` | 1 | 1 | 0 |", report)
@@ -1937,6 +1946,9 @@ SELECT id FROM analytics.orders;
             self.assertIn("parse_error", log_payload)
             report_payload = next(out_dir.glob("*-madsql-convert-report.md")).read_text(encoding="utf-8")
             self.assertIn("## Error Type Counts", report_payload)
+            self.assertIn("## Error Details", report_payload)
+            self.assertIn("- Command Type: `convert`", report_payload)
+            self.assertIn("- Failed Inputs: `1`", report_payload)
 
     def test_split_ignore_errors_returns_zero_and_preserves_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1968,6 +1980,9 @@ SELECT id FROM analytics.orders;
             self.assertIn("parse_error", log_payload)
             report_payload = next(out_dir.glob("*-madsql-split-statements-report.md")).read_text(encoding="utf-8")
             self.assertIn("## Error Type Counts", report_payload)
+            self.assertIn("## Error Details", report_payload)
+            self.assertIn("- Command Type: `split-statements`", report_payload)
+            self.assertIn("- Failed Inputs: `1`", report_payload)
 
     def test_infer_schema_ignore_errors_returns_zero_and_preserves_diagnostics(self) -> None:
         sql = """

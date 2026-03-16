@@ -8,6 +8,7 @@ __pycache__/
 *.local
 *.log
 .python-version
+cli.tests.sh
 
 build/
 dist/

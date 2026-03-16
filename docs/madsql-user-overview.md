@@ -331,7 +331,7 @@ madsql --version
 
 Core idea:
 
-> deterministic SQL conversion, splitting, and schema inference in one CLI
+>SQL conversion, splitting, and schema inference in one CLI
 
 ---
 # [fit] Questions?

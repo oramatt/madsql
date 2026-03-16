@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "madsql"
-version = "0.11.0"
+version = "0.11.1"
 description = "Deterministic CLI SQL dialect transcoding with SQLGlot."
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -560,6 +560,7 @@ def run_convert(args: argparse.Namespace) -> int:
     all_errors: list[ConversionError] = []
     output_written = False
     files_processed = 0
+    successful_inputs = 0
     outputs_written = 0
     total_statement_count = 0
     converted_statement_count = 0
@@ -593,6 +594,8 @@ def run_convert(args: argparse.Namespace) -> int:
         converted_statement_type_counts.update(payload_stats.converted_statement_type_counts)
         all_errors.extend(errors)
         attempts.append(_attempt_record(path=None, payload_stats=payload_stats, errors=errors))
+        if not errors:
+            successful_inputs += 1
         if args.fail_fast and errors:
             stop_after_current = True
     else:
@@ -625,6 +628,8 @@ def run_convert(args: argparse.Namespace) -> int:
             converted_statement_type_counts.update(payload_stats.converted_statement_type_counts)
             all_errors.extend(errors)
             attempts.append(_attempt_record(path=input_file.path, payload_stats=payload_stats, errors=errors))
+            if not errors:
+                successful_inputs += 1
             if args.fail_fast and errors:
                 stop_after_current = True
                 break
@@ -676,9 +681,11 @@ def run_convert(args: argparse.Namespace) -> int:
         report_path = _report_output_file(out_path)
         _write_markdown_report(
             path=report_path,
+            command_text=args.invoked_command,
             source=args.source,
             target=args.target,
             input_count=files_processed,
+            success_count=successful_inputs,
             output_count=outputs_written,
             total_statement_count=total_statement_count,
             converted_statement_count=converted_statement_count,
@@ -847,6 +854,7 @@ def run_split_statements(args: argparse.Namespace) -> int:
         report_path = _split_report_output_file(out_path)
         _write_split_markdown_report(
             path=report_path,
+            command_text=args.invoked_command,
             source=args.source,
             input_count=files_processed,
             success_count=successful_inputs,
@@ -999,11 +1007,13 @@ def run_infer_schema(args: argparse.Namespace) -> int:
         report_path = _infer_schema_report_output_file(out_path)
         _write_infer_schema_markdown_report(
             path=report_path,
+            command_text=args.invoked_command,
             source=args.source,
             target=rendered_target,
             output_format=args.format,
             input_count=total_inputs,
             success_count=successful_inputs,
+            output_count=1 if out_path is not None else 0,
             result=result,
             errors=all_errors,
             overwrite=args.overwrite,
@@ -1348,9 +1358,11 @@ def _empty_payload_stats() -> PayloadStats:
 def _write_markdown_report(
     *,
     path: Path,
+    command_text: str,
     source: str,
     target: str,
     input_count: int,
+    success_count: int,
     output_count: int,
     total_statement_count: int,
     converted_statement_count: int,
@@ -1360,59 +1372,53 @@ def _write_markdown_report(
     errors: list[ConversionError],
     overwrite: bool,
 ) -> None:
+    failure_count = max(0, input_count - success_count)
+    success_rate = 0.0
+    if input_count > 0:
+        success_rate = (success_count / input_count) * 100.0
     failed_statement_count = max(0, total_statement_count - converted_statement_count)
     conversion_rate = 0.0
     if total_statement_count > 0:
         conversion_rate = (converted_statement_count / total_statement_count) * 100.0
 
-    error_type_counts = Counter(error.error_type for error in errors)
     statement_types = sorted(statement_type_counts)
 
     lines = [
-        "# madsql Conversion Report",
+        "# madsql Convert Report",
         "",
         "## Summary",
+        "- Command Type: `convert`",
+        f"- Invoked Command: `{command_text}`",
         f"- Source Dialect: `{source}`",
         f"- Target Dialect: `{target}`",
-        f"- Split Statements Mode: `{'yes' if split_statements else 'no'}`",
         f"- Inputs Processed: `{input_count}`",
+        f"- Successful Inputs: `{success_count}`",
+        f"- Failed Inputs: `{failure_count}`",
+        f"- Success Rate: `{success_count}/{input_count} ({success_rate:.1f}%)`",
         f"- Output Files Written: `{output_count}`",
+        f"- Split Statements Mode: `{'yes' if split_statements else 'no'}`",
+        "",
+        "## Conversion Metrics",
+        "",
         f"- Total Statements: `{total_statement_count}`",
         f"- Successfully Converted: `{converted_statement_count}`",
-        f"- Failed: `{failed_statement_count}`",
+        f"- Failed Statements: `{failed_statement_count}`",
         f"- Conversion Rate: `{converted_statement_count}/{total_statement_count} ({conversion_rate:.1f}%)`",
         "",
     ]
     lines.extend(_report_version_section())
-
-    if statement_types:
-        lines.extend(
-            [
-                "## Statement Type Counts",
-                "",
-                "| Statement Type | Total | Converted | Failed |",
-                "| --- | ---: | ---: | ---: |",
-            ]
+    lines.extend(
+        _statement_type_counts_section(
+            heading="## Statement Type Counts",
+            total_label="Total",
+            success_label="Converted",
+            statement_types=statement_types,
+            total_counts=statement_type_counts,
+            success_counts=converted_statement_type_counts,
         )
-        for statement_type in statement_types:
-            total = statement_type_counts.get(statement_type, 0)
-            converted = converted_statement_type_counts.get(statement_type, 0)
-            failed = max(0, total - converted)
-            lines.append(f"| `{statement_type}` | {total} | {converted} | {failed} |")
-        lines.append("")
-
-    if error_type_counts:
-        lines.extend(
-            [
-                "## Error Type Counts",
-                "",
-                "| Error Type | Count |",
-                "| --- | ---: |",
-            ]
-        )
-        for error_type in sorted(error_type_counts):
-            lines.append(f"| `{error_type}` | {error_type_counts[error_type]} |")
-        lines.append("")
+    )
+    lines.extend(_error_type_counts_section(errors))
+    lines.extend(_error_details_section(errors))
 
     payload = "\n".join(lines)
     if not payload.endswith("\n"):
@@ -1431,6 +1437,7 @@ def _report_output_file(out_path: Path | None) -> Path:
 def _write_split_markdown_report(
     *,
     path: Path,
+    command_text: str,
     source: str | None,
     input_count: int,
     success_count: int,
@@ -1451,20 +1458,23 @@ def _write_split_markdown_report(
 
     failed_statement_count = max(0, total_statement_count - split_statement_count)
     statement_types = sorted(statement_type_counts)
-    error_type_counts = Counter(error.error_type for error in errors)
     source_value = source if source else "n/a"
 
     lines = [
-        "# madsql Run Report",
+        "# madsql Split Statements Report",
         "",
         "## Summary",
         "- Command Type: `split-statements`",
+        f"- Invoked Command: `{command_text}`",
         f"- Source Dialect: `{source_value}`",
         f"- Inputs Processed: `{input_count}`",
         f"- Successful Inputs: `{success_count}`",
         f"- Failed Inputs: `{failure_count}`",
         f"- Success Rate: `{success_count}/{input_count} ({success_rate:.1f}%)`",
         f"- Output Files Written: `{output_count}`",
+        "",
+        "## Split Metrics",
+        "",
         f"- Total Statements: `{total_statement_count}`",
         f"- Statements Split: `{split_statement_count}`",
         f"- Statements Failed: `{failed_statement_count}`",
@@ -1486,34 +1496,18 @@ def _write_split_markdown_report(
             lines.append(f"| `{engine}` | {engine_counts[engine]} |")
         lines.append("")
 
-    if statement_types:
-        lines.extend(
-            [
-                "## Statement Type Counts",
-                "",
-                "| Statement Type | Total | Split | Failed |",
-                "| --- | ---: | ---: | ---: |",
-            ]
+    lines.extend(
+        _statement_type_counts_section(
+            heading="## Statement Type Counts",
+            total_label="Total",
+            success_label="Split",
+            statement_types=statement_types,
+            total_counts=statement_type_counts,
+            success_counts=split_statement_type_counts,
         )
-        for statement_type in statement_types:
-            total = statement_type_counts.get(statement_type, 0)
-            split = split_statement_type_counts.get(statement_type, 0)
-            failed = max(0, total - split)
-            lines.append(f"| `{statement_type}` | {total} | {split} | {failed} |")
-        lines.append("")
-
-    if error_type_counts:
-        lines.extend(
-            [
-                "## Error Type Counts",
-                "",
-                "| Error Type | Count |",
-                "| --- | ---: |",
-            ]
-        )
-        for error_type in sorted(error_type_counts):
-            lines.append(f"| `{error_type}` | {error_type_counts[error_type]} |")
-        lines.append("")
+    )
+    lines.extend(_error_type_counts_section(errors))
+    lines.extend(_error_details_section(errors))
 
     payload = "\n".join(lines)
     if not payload.endswith("\n"):
@@ -1664,11 +1658,13 @@ def _write_infer_schema_log(
 def _write_infer_schema_markdown_report(
     *,
     path: Path,
+    command_text: str,
     source: str | None,
     target: str | None,
     output_format: str,
     input_count: int,
     success_count: int,
+    output_count: int,
     result,
     errors: list[ConversionError],
     overwrite: bool,
@@ -1678,7 +1674,6 @@ def _write_infer_schema_markdown_report(
     if input_count > 0:
         success_rate = (success_count / input_count) * 100.0
 
-    error_type_counts = Counter(error.error_type for error in errors)
     confidence_counts = Counter(column.confidence for table in result.tables for column in table.columns)
     render_dialect = target or "n/a"
 
@@ -1687,6 +1682,7 @@ def _write_infer_schema_markdown_report(
         "",
         "## Summary",
         "- Command Type: `infer-schema`",
+        f"- Invoked Command: `{command_text}`",
         f"- Source Dialect: `{source or 'n/a'}`",
         f"- Render Dialect: `{render_dialect}`",
         f"- Output Format: `{output_format}`",
@@ -1694,6 +1690,10 @@ def _write_infer_schema_markdown_report(
         f"- Successful Inputs: `{success_count}`",
         f"- Failed Inputs: `{failure_count}`",
         f"- Success Rate: `{success_count}/{input_count} ({success_rate:.1f}%)`",
+        f"- Output Files Written: `{output_count}`",
+        "",
+        "## Inference Metrics",
+        "",
         f"- Statements Parsed: `{result.statement_count}`",
         f"- Tables Inferred: `{result.table_count}`",
         f"- Columns Inferred: `{result.column_count}`",
@@ -1714,44 +1714,8 @@ def _write_infer_schema_markdown_report(
             lines.append(f"| `{confidence}` | {confidence_counts[confidence]} |")
         lines.append("")
 
-    if error_type_counts:
-        lines.extend(
-            [
-                "## Error Type Counts",
-                "",
-                "| Error Type | Count |",
-                "| --- | ---: |",
-            ]
-        )
-        for error_type in sorted(error_type_counts):
-            lines.append(f"| `{error_type}` | {error_type_counts[error_type]} |")
-        lines.append("")
-
-    if errors:
-        lines.extend(["## Error Details", ""])
-        for error in errors:
-            lines.extend(
-                [
-                    f"### Statement {error.statement_index}",
-                    f"- Path: `{error.path or '<stdin>'}`",
-                    f"- Error Type: `{error.error_type}`",
-                    f"- Statement Type: `{error.statement_type or 'n/a'}`",
-                    "- Message:",
-                    "```text",
-                    error.message,
-                    "```",
-                ]
-            )
-            if error.statement_sql:
-                lines.extend(
-                    [
-                        "- Statement:",
-                        "```sql",
-                        error.statement_sql,
-                        "```",
-                    ]
-                )
-            lines.append("")
+    lines.extend(_error_type_counts_section(errors))
+    lines.extend(_error_details_section(errors))
 
     payload = "\n".join(lines)
     if not payload.endswith("\n"):
@@ -1950,6 +1914,81 @@ def _report_version_section() -> list[str]:
         f"- Platform: `{version_info['platform']}`",
         "",
     ]
+
+
+def _statement_type_counts_section(
+    *,
+    heading: str,
+    total_label: str,
+    success_label: str,
+    statement_types: list[str],
+    total_counts: dict[str, int],
+    success_counts: dict[str, int],
+) -> list[str]:
+    if not statement_types:
+        return []
+
+    lines = [
+        heading,
+        "",
+        f"| Statement Type | {total_label} | {success_label} | Failed |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for statement_type in statement_types:
+        total = total_counts.get(statement_type, 0)
+        success = success_counts.get(statement_type, 0)
+        failed = max(0, total - success)
+        lines.append(f"| `{statement_type}` | {total} | {success} | {failed} |")
+    lines.append("")
+    return lines
+
+
+def _error_type_counts_section(errors: list[ConversionError]) -> list[str]:
+    error_type_counts = Counter(error.error_type for error in errors)
+    if not error_type_counts:
+        return []
+
+    lines = [
+        "## Error Type Counts",
+        "",
+        "| Error Type | Count |",
+        "| --- | ---: |",
+    ]
+    for error_type in sorted(error_type_counts):
+        lines.append(f"| `{error_type}` | {error_type_counts[error_type]} |")
+    lines.append("")
+    return lines
+
+
+def _error_details_section(errors: list[ConversionError]) -> list[str]:
+    if not errors:
+        return []
+
+    lines = ["## Error Details", ""]
+    for error in errors:
+        lines.extend(
+            [
+                f"### Statement {error.statement_index}",
+                f"- Path: `{error.path or '<stdin>'}`",
+                f"- Error Type: `{error.error_type}`",
+                f"- Statement Type: `{error.statement_type or 'n/a'}`",
+                "- Message:",
+                "```text",
+                error.message,
+                "```",
+            ]
+        )
+        if error.statement_sql:
+            lines.extend(
+                [
+                    "- Statement:",
+                    "```sql",
+                    error.statement_sql,
+                    "```",
+                ]
+            )
+        lines.append("")
+    return lines
 
 
 def _debug_version_summary() -> str:
