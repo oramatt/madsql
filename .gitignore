@@ -9,6 +9,7 @@ __pycache__/
 *.log
 .python-version
 cli.tests.sh
+madsql-user-overview.oracle.pdf
 
 build/
 dist/

@@ -6,8 +6,7 @@ footer: madsql overview
 # [fit] madsql 🤬
 ## Deterministic SQL dialect transcoding from the command line
 
-### Matt DeMarco
-### matthew.demarco@oracle.com
+### OraMatt 
 
 ---
 
