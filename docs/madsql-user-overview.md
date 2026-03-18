@@ -3,32 +3,33 @@ autoscale: true
 build-lists: true
 footer: madsql overview
 
-# [fit] madsql 🤬
-## Deterministic SQL dialect transcoding from the command line
+# madsql 🤬
+### Deterministic SQL dialect transcoding from the command line
 
-### OraMatt 
+### Matt DeMarco
+#### `oramatt`
 
 ---
 
 # Why madsql exists
 
-- SQL migrations are repetitive, brittle, and easy to do inconsistently.
-- Batch conversion gets harder when scripts contain mixed formatting and multiple statements.
-- Schema context is often missing when all you have is a query workload.
-- `madsql` wraps `SQLGlot` and `sqlparse` into one deterministic CLI workflow.
+- SQL migrations are repetitive, brittle, and easy to do inconsistently
+- Batch conversion gets harder when scripts contain mixed formatting and multiple statements
+- Schema context is often missing when all you have is a query workload
+- `madsql` wraps `SQLGlot` and `sqlparse` into one deterministic CLI workflow
 
 ---
 
 # What ships today
 
 - `madsql dialects`
-  List supported SQL dialect names.
+  List supported SQL dialect names
 - `madsql convert`
-  Convert SQL between dialects.
+  Convert SQL between dialects
 - `madsql split-statements`
-  Split multi-statement SQL into one file per statement.
+  Split multi-statement SQL into one file per statement
 - `madsql infer-schema`
-  Infer creation DDL or JSON from SQL workloads.
+  Infer creation DDL or JSON from SQL workloads
 
 ---
 
@@ -51,8 +52,6 @@ Examples from the current repo runtime (32 in total):
 From the repository root:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -U pip
 pip install -e .
 madsql --version
@@ -62,15 +61,17 @@ Expected runtime shape:
 
 ```text
 madsql 0.11.2
-python 3.13.x
+python 3.13.5
 sqlglot 29.0.1
 sqlparse 0.5.3
+sql-metadata 2.20.0
+simple-ddl-parser 1.10.0
 ```
 
 ---
 
 # Demo 1
-## Convert one statement from stdin
+## Convert statement from stdin emit to stdout
 
 ```bash
 echo 'SELECT TOP 3 [name] FROM dbo.users;' | madsql convert --source tsql --target oracle
@@ -106,22 +107,33 @@ madsql convert --source postgres --target mysql --in ./sql --out ./converted
 # Demo 3
 ## Split multi-statement SQL
 
+[.column]
 ```bash
 madsql split-statements \
   --in ./examples/input/mssql/example_queries.sql \
-  --out ./split
+  --out /tmp/split
 ```
+[.column]
+#### Resulting layout:
 
-Resulting layout:
+```bash
+/tmp/split
+├── 20260312-175209-madsql-split-statements-report.md
+├── examples
+│   └── input
+│       └── mssql
+│           └── example_queries
+│               ├── 0001_stmt.sql
+│               ├── 0002_stmt.sql
+│               ├── 0003_stmt.sql
+│               ├── 0004_stmt.sql
+│               ├── 0005_stmt.sql
+│               ├── 0006_stmt.sql
+│               ├── 0007_stmt.sql
+│               ├── 0008_stmt.sql
+│               └── 0009_stmt.sql
 
-```text
-./split/examples/input/mssql/example_queries/0001_stmt.sql
-./split/examples/input/mssql/example_queries/0002_stmt.sql
-./split/examples/input/mssql/example_queries/0003_stmt.sql
-...
 ```
-
-This is useful when a single script needs review, reordering, or selective replay.
 
 ---
 
@@ -151,26 +163,26 @@ CREATE TABLE nyc_taxi.trips (
 ```
 
 ---
-# Demo 4 (hybrid)
+# Demo 5
 ## Supplement infer-schema with metadata and DDL helpers
 
 ```bash
 madsql infer-schema \
   --source postgres \
-  --infer-engine hybrid \
-  --in ./sql \
-  --out ./artifacts \
-  --report
+  --in example_queries.sql \
+  --target oracle \
+  --out /tmp/artifacts \
+  --report \
+  --infer-engine hybrid
 ```
 
-- Included in the standard install.
-- SQLGlot stays primary.
-- `sql-metadata` supplements query metadata.
-- `simple-ddl-parser` supplements `CREATE TABLE` extraction.
-- Hybrid reports are named like `<timestamp>-madsql-infer-schema-hybrid.md`.
+- `SQLGlot` stays primary
+- `sql-metadata` supplements query metadata
+- `simple-ddl-parser` supplements `CREATE TABLE` extraction
+- Hybrid reports are named like `<timestamp>-madsql-infer-schema-hybrid.md`
 
 ---
-# Demo 4 (cont)
+# Demo 6
 ## Infer schema from a query workload for specific target
 
 ```bash
@@ -183,7 +195,7 @@ madsql infer-schema \
   --pretty
 ```
 ---
-Sample output:
+## Sample output:
 
 ```sql
 CREATE USER nyc_taxi IDENTIFIED BY "matt";
@@ -192,7 +204,7 @@ GRANT CREATE SESSION, CREATE TABLE TO nyc_taxi;
 ALTER SESSION SET CURRENT_SCHEMA = nyc_taxi;
 ```
 ---
-Sample output: 
+## Sample output: 
 
 ```sql
 CREATE TABLE nyc_taxi.neighborhoods (
@@ -215,17 +227,17 @@ CREATE TABLE nyc_taxi.trips (
 ```
 
 ---
-# Demo 4 (cont)
+# Demo 7
 ## Infer schema from stdin
 
 ```bash
 echo "select x.xxx, y.yyy from foo x, bar y where x.xxx=y.yyy limit 10" | \
 madsql infer-schema --target oracle --default-type 'varchar2(100)' --pretty
-
 ```
---- 
 
-# Sample output: 
+---
+
+## Sample output: 
 
 ```sql
 CREATE TABLE bar (
@@ -238,7 +250,7 @@ CREATE TABLE foo (
 
 ```
 ---
-# Demo 4 (cont)
+# Demo 8
 ## Infer schema from stdin & derive types
 
 ```bash
@@ -248,7 +260,7 @@ madsql infer-schema --target oracle --default-type 'varchar2(100)' --pretty
 ```
 
 ---
-# Sample output:
+## Sample output:
 
 ```sql
 CREATE TABLE bar (
@@ -261,36 +273,51 @@ CREATE TABLE foo (
 ```
 
 ---
+# Demo 9
+## Infer schema from stdin, create objects, convert & run query
+
+```bash
+echo "use alice; select a.x, b.x from foo a, bar b limit 100" | \
+madsql infer-schema --source mysql --target oracle --create-user --create-user-password 'matt' | \
+orasql -S matt/matt@localhost/FREEPDB1 | \
+sleep 1; echo "use alice; select a.x, b.x from foo a, bar b limit 100" | \
+madsql convert --source mysql --target oracle | \
+orasql -S alice/matt@localhost/FREEPDB1
+```
+### Output
+```text
+no rows selected
+```
+
+---
 
 # Inference details
 
-- `infer-schema` merges evidence from multiple statements.
-- `CREATE TABLE` contributes explicit types.
-- `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE VIEW`, and `CREATE INDEX` add table and column references.
-- `--infer-engine hybrid` keeps SQLGlot primary and supplements it with `sql-metadata` and `simple-ddl-parser`.
-- `convert` and `split-statements` use `--infer-schema-engine hybrid` for schema side artifacts.
-- Output can be DDL or JSON.
-- Unqualified columns can be skipped or assigned with low confidence.
+- `infer-schema` merges evidence from multiple statements
+- `CREATE TABLE` contributes explicit types
+- `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE VIEW`, and `CREATE INDEX` add table and column references
+- `--infer-engine hybrid` keeps `SQLGlot` primary and supplements it with `sql-metadata` and `simple-ddl-parser`
+- `convert` and `split-statements` use `--infer-schema-engine hybrid` for schema side artifacts
+- Output can be DDL or JSON
+- Unqualified columns can be skipped or assigned with low confidence
 
 ---
 
 # Observability and error handling
 
-- Default behavior is continue-on-error with a non-zero exit code if failures were recorded.
-- `--fail-fast` stops on the first failure.
-- `--ignore-errors` returns exit code `0` while still recording diagnostics.
-- `--errors errors.json` writes a structured JSON report.
-- `--log 0` or `--log 1` writes run logs.
-- `--report` writes a timestamped Markdown summary.
-- Standard infer-schema reports end in `-madsql-infer-schema-report.md`; hybrid infer-schema reports end in `-madsql-infer-schema-hybrid.md`.
+- Default behavior is continue-on-error with a non-zero exit code if failures were recorded
+- `--fail-fast` stops on the first failure
+- `--ignore-errors` returns exit code `0` while still recording diagnostics
+- `--errors errors.json` writes a structured JSON report
+- `--log 0` or `--log 1` writes run logs
+- `--report` writes a timestamped Markdown summary
 
 ---
 
 # Why it works well in CI
 
-- Deterministic outputs for identical inputs and `SQLGlot` version.
-- Stable statement ordering and UTF-8 output.
-- Predictable artifact names such as `input.postgres.sql` and `inferred_schema-postgres.sql`.
+- Deterministic outputs for identical inputs and `SQLGlot` version
+- Predictable artifact names
 - Clear exit codes:
   - `0` for success
   - `1` for completed runs with recorded parse or conversion errors
@@ -311,10 +338,10 @@ CREATE TABLE foo (
 
 # Boundaries
 
-- This is a CLI, not a GUI.
-- It intentionally builds on `SQLGlot` and `sqlparse`; it does not hide that dependency.
-- Output quality depends on parser support for the source dialect and syntax used.
-- It is strongest when you want reproducible automation, not hand-tuned one-off rewrites.
+- This is a CLI, not a GUI
+- It intentionally builds on `SQLGlot`, `sqlparse`, `sql-metadata`, and `simple-ddl-parser`
+- Output quality depends on parser support for the source dialect and syntax used
+- It is strongest when you want reproducible automation, not hand-tuned one-off rewrites
 
 ---
 
@@ -356,7 +383,7 @@ Core idea:
 
 ---
 
-# FAQs 
+# FAQs
 
 1. What does **madsql** stand for?
   - **madsql** stands for **M**igration **A**ssistant for **D**atabase Dialects and, of course SQL but it could mean something else entirely 🤷.
@@ -373,7 +400,9 @@ Core idea:
 5. Will you implement a GUI?
   - There is no plan on supporting any other interface besides the terminal because that's my preferred interface.
 
+
 ---
+
 # [fit] Questions?
 
 
