@@ -12,6 +12,7 @@ cli.tests.sh
 madsql-user-overview.oracle.pdf
 madsql-user-guide.md
 madsql-user-overview.md
+madsql-user-overview.oracle.md
 
 build/
 dist/

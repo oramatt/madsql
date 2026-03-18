@@ -35,6 +35,7 @@ pip install -e .
 
 After installation, the `madsql` command is available as a console script.
 
+
 ------------------------------------------------------------------------
 
 ## Verification
@@ -251,6 +252,13 @@ Write converted files plus a deterministic schema side artifact:
 madsql convert --source postgres --target mysql --in ./sql --out ./converted --infer-schema
 ```
 
+Use hybrid inference for that side artifact when you want SQLGlot plus
+`sql-metadata` and `simple-ddl-parser`:
+
+``` bash
+madsql convert --source postgres --target mysql --in ./sql --out ./converted --infer-schema --infer-schema-engine hybrid
+```
+
 Pretty-print converted SQL:
 
 ``` bash
@@ -291,6 +299,7 @@ madsql convert --source postgres --target mysql --in ./sql --out ./converted --c
 
 -   `--out` is required for directory, glob, split, log, report, and schema side-artifact workflows.
 -   `--infer-schema` writes deterministic artifact names such as `inferred_schema-postgres-to-mysql.sql`, `inferred_schema-postgres.sql`, or `inferred_schema-postgres.json` at the base of `--out`.
+-   `--infer-schema-engine sqlglot|hybrid` controls whether schema side artifacts use SQLGlot only or hybrid inference with `sql-metadata` and `simple-ddl-parser`.
 -   Split outputs use deterministic statement names like `0001_stmt.oracle.sql` and keep statement indexes stable when later statements still succeed.
 -   `--continue` and `--fail-fast` are mutually exclusive.
 
@@ -326,6 +335,12 @@ Emit structured JSON instead of DDL:
 
 ``` bash
 madsql infer-schema --source postgres --format json --in ./sql --out ./artifacts
+```
+
+Use hybrid inference for DDL-heavy or metadata-only workloads:
+
+``` bash
+madsql infer-schema --source postgres --infer-engine hybrid ./queries.sql
 ```
 
 Pretty-print inferred DDL:
@@ -376,6 +391,8 @@ Write structured errors, a timestamped log, and a markdown report:
 madsql infer-schema --source postgres --in ./sql --out ./artifacts/schema.sql --errors infer-errors.json --log 1 --report
 ```
 
+Hybrid infer-schema reports are written as `YYYYMMDD-HHMMSS-madsql-infer-schema-hybrid.md`. Standard infer-schema reports keep the existing `YYYYMMDD-HHMMSS-madsql-infer-schema-report.md` pattern.
+
 Continue through malformed or unsupported statements but still return exit code `0`:
 
 ``` bash
@@ -385,10 +402,13 @@ madsql infer-schema --source postgres --in ./sql --out ./artifacts/schema.sql --
 `infer-schema` notes:
 
 -   `--format ddl|json`
+-   `--infer-engine sqlglot|hybrid`
 -   `--default-type TYPE`
 -   `--unqualified-columns first-table|skip`
 -   `--if-not-exists`
 -   `--pretty|--compact` for DDL output
+-   `--infer-engine hybrid` keeps SQLGlot as the primary parser and supplements it with `sql-metadata` for query metadata and `simple-ddl-parser` for DDL extraction.
+-   Hybrid inference requires `pip install -e .[infer]` or direct installation of `sql-metadata` and `simple-ddl-parser`.
 -   Inputs are split statement-by-statement and parsed individually so malformed later statements do not discard earlier inferred schema.
 -   Common dashboard-style constructs such as `IN ()`, doubled quoted aliases, `${...}`, and `$name` placeholders are normalized during fallback parsing so more real-world SQL can still be inferred.
 -   Input `CREATE SCHEMA` and `CREATE DATABASE` statements render directly in DDL output. For Oracle targets they are emitted as `CREATE USER` plus grants and require `--create-user-password`.
@@ -444,6 +464,13 @@ Write a schema side artifact while splitting:
 madsql split-statements --source postgres --in ./sql --out ./split --infer-schema --infer-schema-format json
 ```
 
+Use hybrid inference for that side artifact when the workload benefits from
+supplemental metadata and DDL extraction:
+
+``` bash
+madsql split-statements --source postgres --in ./sql --out ./split --infer-schema --infer-schema-engine hybrid
+```
+
 Write parse errors to JSON:
 
 ``` bash
@@ -460,7 +487,7 @@ madsql split-statements --in ./sql --out ./split --continue --log 1 --report
 
 -   Compact output is the default; use `--pretty` for multiline rendering when SQLGlot is doing the split rendering.
 -   Output files use deterministic names like `0001_stmt.sql`, `0002_stmt.sql`, and so on.
--   `--infer-schema` writes deterministic artifact names beside the split outputs and supports `--infer-schema-format`, `--infer-schema-default-type`, `--infer-schema-unqualified-columns`, `--infer-schema-if-not-exists`, `--infer-schema-create-schema`, `--infer-schema-create-user`, and `--infer-schema-create-user-password`.
+-   `--infer-schema` writes deterministic artifact names beside the split outputs and supports `--infer-schema-format`, `--infer-schema-engine`, `--infer-schema-default-type`, `--infer-schema-unqualified-columns`, `--infer-schema-if-not-exists`, `--infer-schema-create-schema`, `--infer-schema-create-user`, and `--infer-schema-create-user-password`.
 -   If SQLGlot cannot parse a split-only input, `madsql` falls back to `sqlparse` for boundary detection on that input and reports fallback usage in `--report`.
 -   `--continue` and `--fail-fast` are mutually exclusive.
 
@@ -558,7 +585,7 @@ flowchart TD
   B -->|dialects| C["List supported dialects"] --> Z["Exit 0"]
   B -->|convert| CA["Validate dialects and flags<br/>Reject invalid combinations such as<br/>--continue + --fail-fast or missing required --out"] 
   B -->|split-statements| SA["Validate optional --source and required --out<br/>Reject invalid combinations such as<br/>--continue + --fail-fast"]
-  B -->|infer-schema| IA["Validate optional dialects, formatting flags,<br/>and output requirements"]
+  B -->|infer-schema| IA["Validate optional dialects, formatting flags,<br/>infer engine selection, and output requirements"]
 
   CA --> CB{"Inputs provided?"}
   CB -->|no| CC["Read stdin"]
@@ -580,7 +607,7 @@ flowchart TD
   CK --> CR["Accumulate errors and run stats"]
   CQ --> CR
   CR --> CRA{"--infer-schema?"}
-  CRA -->|yes| CRB["Infer tables and columns<br/>Write deterministic inferred_schema-...sql/json"]
+  CRA -->|yes| CRB["Infer tables and columns with SQLGlot or hybrid engine<br/>Write deterministic inferred_schema-...sql/json"]
   CRA -->|no| CS{"Errors in this input and --fail-fast?"}
   CRB --> CS
   CS -->|yes| CT["Stop after current input"]
@@ -610,7 +637,7 @@ flowchart TD
   SJ --> SN
   SM --> SN
   SN --> SNA{"--infer-schema?"}
-  SNA -->|yes| SNB["Infer tables and columns<br/>Write deterministic inferred_schema-...sql/json"]
+  SNA -->|yes| SNB["Infer tables and columns with SQLGlot or hybrid engine<br/>Write deterministic inferred_schema-...sql/json"]
   SNA -->|no| SO{"Errors in this input and --fail-fast?"}
   SNB --> SO
   SO -->|yes| SP["Stop after current input"]
@@ -628,14 +655,15 @@ flowchart TD
   IB -->|yes| ID["Expand files, directories, and globs<br/>Sort deterministically"]
   IC --> IE["Split into statements with sqlparse boundaries<br/>Parse each statement with SQLGlot<br/>Apply fallback normalization for common template SQL"]
   ID --> IE
-  IE --> IF["Support USE, SELECT, DELETE, INSERT, UPDATE,<br/>CREATE TABLE/VIEW/MATERIALIZED VIEW/INDEX,<br/>CREATE SCHEMA, and CREATE DATABASE"]
-  IF --> IG["Infer tables, columns, declared schema names,<br/>and best-effort types<br/>Record parse and unsupported-statement errors with SQL text"]
-  IG --> IH["Render compact DDL by default,<br/>pretty DDL with --pretty,<br/>or JSON with --format json<br/>Oracle can emit CREATE USER and GRANT from schema declarations"]
-  IH --> IHA{"--out provided?"}
-  IHA -->|no| II["Write stdout"]
-  IHA -->|yes| IJ["Write explicit file or deterministic schema artifact"]
+  IE --> IF["Use --infer-engine sqlglot or hybrid<br/>Hybrid keeps SQLGlot primary and supplements inference with<br/>sql-metadata and simple-ddl-parser when available"]
+  IF --> IG["Support USE, SELECT, DELETE, INSERT, UPDATE,<br/>CREATE TABLE/VIEW/MATERIALIZED VIEW/INDEX,<br/>CREATE SCHEMA, and CREATE DATABASE"]
+  IG --> IH["Infer tables, columns, declared schema names,<br/>and best-effort types<br/>Record parse and unsupported-statement errors with SQL text"]
+  IH --> IHA["Render compact DDL by default,<br/>pretty DDL with --pretty,<br/>or JSON with --format json<br/>Oracle can emit CREATE USER and GRANT from schema declarations"]
+  IHA --> IHB{"--out provided?"}
+  IHB -->|no| II["Write stdout"]
+  IHB -->|yes| IJ["Write explicit file or deterministic schema artifact"]
   II --> IJA["Optional artifacts<br/>JSON errors only with version_info"]
-  IJ --> IJB["Optional artifacts<br/>JSON errors, timestamped log, markdown report<br/>Logs and reports include versions and statement SQL"]
+  IJ --> IJB["Optional artifacts<br/>JSON errors, timestamped log, markdown report<br/>Hybrid reports use ...-madsql-infer-schema-hybrid.md<br/>Standard reports use ...-madsql-infer-schema-report.md"]
   IJA --> IK{"Any errors overall?"}
   IJB --> IK
   IK -->|yes| IL["Print stderr summary"] --> IM{"--ignore-errors?"}
@@ -648,20 +676,20 @@ flowchart TD
 
 ## FAQs
 
-1. Is another SQL translator _really_ needed?
-  - Honestly, no but I wanted something I could use across multiple projects that supported the workflows I use.
-
-2. What does **madsql** stand for?
+1. What does **madsql** stand for?
   - **madsql** stands for **M**igration **A**ssistant for **D**atabase Dialects and, of course SQL but it could mean something else entirely 🤷.
 
+2. Is another SQL translator _really_ needed?
+  - Honestly, no but I wanted something I could use across multiple projects that supported the workflows I use.
+
 3. Is this _just_ a wrapper for SQLGlot and sqlparse?
-  - Yup and I don't hide that fact.
+  - Somewhat but regardless, I don't hide the libraries used.
 
 4. Why preserve relative paths in `--out`/`--output`?
-- Preserving relative paths prevents filename collisions, keeps source-to-output mapping easy to trace, and guarantees deterministic output layout for batch runs and CI diffs.
+  - Preserving relative paths prevents filename collisions, keeps source-to-output mapping easy to trace, and guarantees deterministic output layout for batch runs and CI diffs.
 
 5. Will you implement a GUI?
-- There is no plan on supporting any other interface besides the terminal because that's my preferred interface.
+  - There is no plan on supporting any other interface besides the terminal because that's my preferred interface.
 
 
 ------------------------------------------------------------------------

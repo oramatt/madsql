@@ -19,6 +19,13 @@ pip install -U pip
 pip install -e .
 ```
 
+If you plan to use hybrid schema inference with `sql-metadata` and
+`simple-ddl-parser`, install the optional infer extras:
+
+```bash
+pip install -e .[infer]
+```
+
 Verify the runtime:
 
 ```bash
@@ -195,12 +202,17 @@ madsql split-statements \
 Artifact tuning options for this workflow include:
 
 - `--infer-schema-format ddl|json`
+- `--infer-schema-engine sqlglot|hybrid`
 - `--infer-schema-default-type TYPE`
 - `--infer-schema-unqualified-columns first-table|skip`
 - `--infer-schema-if-not-exists`
 - `--infer-schema-create-schema`
 - `--infer-schema-create-user`
 - `--infer-schema-create-user-password PASSWORD`
+
+`--infer-schema-engine hybrid` keeps SQLGlot as the primary inference engine
+and supplements the side artifact with `sql-metadata` and
+`simple-ddl-parser`. Hybrid mode requires `pip install -e .[infer]`.
 
 ## Chapter 3: Convert
 
@@ -339,6 +351,22 @@ inferred_schema-postgres-to-mysql.sql
 The infer-schema artifact options mirror the standalone schema command, but
 use `--infer-schema-*` names in the `convert` workflow.
 
+Use hybrid inference for the side artifact when the workload includes
+statements that benefit from supplemental metadata or DDL parsing:
+
+```bash
+madsql convert \
+  --source postgres \
+  --target mysql \
+  --in ./sql \
+  --out ./converted \
+  --infer-schema \
+  --infer-schema-engine hybrid
+```
+
+This uses the same hybrid inference strategy as standalone `infer-schema` and
+requires `pip install -e .[infer]`.
+
 ### Safe Batch Execution
 
 Useful batch flags:
@@ -413,6 +441,13 @@ Merge many files into one schema artifact:
 madsql infer-schema --source postgres --in ./sql --out ./artifacts
 ```
 
+Use hybrid inference when you want SQLGlot plus supplemental metadata and DDL
+recovery:
+
+```bash
+madsql infer-schema --source postgres --infer-engine hybrid --in ./sql --out ./artifacts
+```
+
 ### Output Modes
 
 DDL is the default:
@@ -447,6 +482,25 @@ inferred_schema-postgres.sql
 inferred_schema-postgres.json
 inferred_schema-postgres-to-mysql.sql
 ```
+
+### Inference Engines
+
+SQLGlot-only inference is the default:
+
+```bash
+madsql infer-schema --source postgres ./queries.sql
+```
+
+Hybrid inference keeps SQLGlot as the primary parser and supplements it with
+`sql-metadata` for query metadata and `simple-ddl-parser` for DDL extraction:
+
+```bash
+madsql infer-schema --source postgres --infer-engine hybrid ./queries.sql
+```
+
+Use hybrid mode when the workload mixes normal SQLGlot-friendly SQL with DDL
+or metadata-only statements that still contain useful table and column
+signals. Hybrid mode requires `pip install -e .[infer]`.
 
 ### Tuning Inference
 
@@ -610,7 +664,12 @@ Typical report names:
 ```text
 20260312-180536-madsql-convert-report.md
 20260312-191651-madsql-infer-schema-report.md
+20260312-191651-madsql-infer-schema-hybrid.md
 ```
+
+Standard infer-schema runs keep the
+`YYYYMMDD-HHMMSS-madsql-infer-schema-report.md` name. Hybrid infer-schema
+runs use `YYYYMMDD-HHMMSS-madsql-infer-schema-hybrid.md`.
 
 Reports summarize the run with metrics such as:
 

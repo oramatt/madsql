@@ -61,7 +61,7 @@ madsql --version
 Expected runtime shape:
 
 ```text
-madsql 0.11.0
+madsql 0.11.2
 python 3.13.x
 sqlglot 29.0.1
 sqlparse 0.5.3
@@ -149,6 +149,24 @@ CREATE TABLE nyc_taxi.trips (
   ...
 );
 ```
+
+---
+# Demo 4 (hybrid)
+## Supplement infer-schema with metadata and DDL helpers
+
+```bash
+madsql infer-schema \
+  --source postgres \
+  --infer-engine hybrid \
+  --in ./sql \
+  --out ./artifacts \
+  --report
+```
+
+- SQLGlot stays primary.
+- `sql-metadata` supplements query metadata.
+- `simple-ddl-parser` supplements `CREATE TABLE` extraction.
+- Hybrid reports are named like `<timestamp>-madsql-infer-schema-hybrid.md`.
 
 ---
 # Demo 4 (cont)
@@ -248,6 +266,8 @@ CREATE TABLE foo (
 - `infer-schema` merges evidence from multiple statements.
 - `CREATE TABLE` contributes explicit types.
 - `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE VIEW`, and `CREATE INDEX` add table and column references.
+- `--infer-engine hybrid` keeps SQLGlot primary and supplements it with `sql-metadata` and `simple-ddl-parser`.
+- `convert` and `split-statements` use `--infer-schema-engine hybrid` for schema side artifacts.
 - Output can be DDL or JSON.
 - Unqualified columns can be skipped or assigned with low confidence.
 
@@ -261,6 +281,7 @@ CREATE TABLE foo (
 - `--errors errors.json` writes a structured JSON report.
 - `--log 0` or `--log 1` writes run logs.
 - `--report` writes a timestamped Markdown summary.
+- Standard infer-schema reports end in `-madsql-infer-schema-report.md`; hybrid infer-schema reports end in `-madsql-infer-schema-hybrid.md`.
 
 ---
 
@@ -331,6 +352,25 @@ madsql --version
 Core idea:
 
 >SQL conversion, splitting, and schema inference in one CLI
+
+---
+
+# FAQs 
+
+1. What does **madsql** stand for?
+  - **madsql** stands for **M**igration **A**ssistant for **D**atabase Dialects and, of course SQL but it could mean something else entirely 🤷.
+
+2. Is another SQL translator _really_ needed?
+  - Honestly, no but I wanted something I could use across multiple projects that supported the workflows I use.
+
+3. Is this _just_ a wrapper for SQLGlot and sqlparse?
+  - Somewhat but regardless, I don't hide the libraries used.
+
+4. Why preserve relative paths in `--out`/`--output`?
+  - Preserving relative paths prevents filename collisions, keeps source-to-output mapping easy to trace, and guarantees deterministic output layout for batch runs and CI diffs.
+
+5. Will you implement a GUI?
+  - There is no plan on supporting any other interface besides the terminal because that's my preferred interface.
 
 ---
 # [fit] Questions?

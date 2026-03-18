@@ -15,7 +15,14 @@ from sqlglot import Dialect, __version__ as SQLGLOT_VERSION
 from madsql import __version__ as MADSQL_VERSION
 from madsql.convert import convert_sql, split_sql
 from madsql.errors import ConversionError
-from madsql.infer_schema import infer_schema_many, render_schema_ddl, render_schema_json
+from madsql.infer_schema import (
+    SUPPORTED_INFER_SCHEMA_ENGINES,
+    infer_schema_many,
+    missing_hybrid_infer_schema_dependencies,
+    optional_infer_schema_dependency_versions,
+    render_schema_ddl,
+    render_schema_json,
+)
 from madsql.io import InputFile, ensure_out_path, expand_inputs, read_utf8, write_text
 
 COMMON_DEFAULT_TYPE_VALUES = (
@@ -86,6 +93,8 @@ Observability:
 Schema artifacts:
   - --infer-schema writes deterministic inferred schema artifacts beside
     normal convert outputs.
+  - --infer-schema-engine chooses between SQLGlot-only inference and
+    hybrid inference with sql-metadata and simple-ddl-parser.
   - Use --infer-schema-format, --infer-schema-default-type,
     --infer-schema-unqualified-columns, --infer-schema-if-not-exists,
     --infer-schema-create-schema,
@@ -153,6 +162,8 @@ Run control:
 Schema inference:
   - --infer-schema writes deterministic inferred schema artifacts at the
     top level of the output directory.
+  - --infer-schema-engine chooses between SQLGlot-only inference and
+    hybrid inference with sql-metadata and simple-ddl-parser.
   - Use --infer-schema-format, --infer-schema-default-type,
     --infer-schema-unqualified-columns, --infer-schema-if-not-exists,
     --infer-schema-create-schema,
@@ -213,6 +224,8 @@ Inference rules:
   - CREATE VIEW and CREATE MATERIALIZED VIEW contribute referenced base
     tables and columns from the view query.
   - CREATE INDEX contributes the indexed table and indexed columns.
+  - --infer-engine hybrid keeps SQLGlot as the primary parser and adds
+    sql-metadata and simple-ddl-parser as supplemental inference sources.
   - Unqualified columns in multi-table queries can be skipped or assigned to
     the first table in scope with low confidence.
   - Other parsed statement types are reported as unsupported and skipped.
@@ -271,6 +284,9 @@ Examples:
   Infer schema and write a log and markdown report:
     madsql infer-schema --source postgres --in ./sql --out ./artifacts/schema.sql --log 1 --report
 
+  Use hybrid inference for DDL-heavy or metadata-only workloads:
+    madsql infer-schema --source postgres --infer-engine hybrid ./queries.sql
+
   Prepend CREATE SCHEMA statements for inferred schema names:
     madsql infer-schema --source postgres --target postgres --create-schema ./queries.sql
 
@@ -280,6 +296,7 @@ Examples:
 Notes:
   - Query-only inputs infer table structure heuristically.
   - Low-confidence columns are noted in DDL comments and JSON output.
+  - --infer-engine hybrid requires sql-metadata and simple-ddl-parser.
   - Fatal CLI misuse exits with code 2. Parse/read errors exit with code 1.
 """.format(common_default_type_values=COMMON_DEFAULT_TYPE_VALUES)
 
@@ -473,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     infer_parser.add_argument(
+        "--infer-engine",
+        choices=sorted(SUPPORTED_INFER_SCHEMA_ENGINES),
+        default="sqlglot",
+        help="Inference engine to use: sqlglot only or hybrid SQLGlot + sql-metadata + simple-ddl-parser",
+    )
+    infer_parser.add_argument(
         "--unqualified-columns",
         choices=["first-table", "skip"],
         default="first-table",
@@ -519,6 +542,10 @@ def run_convert(args: argparse.Namespace) -> int:
     _validate_error_strategy(args)
     _validate_dialect(args.source, "source")
     _validate_dialect(args.target, "target")
+    _validate_infer_engine(
+        infer_engine=args.infer_schema_engine,
+        flag_name="--infer-schema-engine",
+    )
     _validate_create_user_options(
         target=args.target,
         output_format=args.infer_schema_format,
@@ -645,6 +672,7 @@ def run_convert(args: argparse.Namespace) -> int:
                 overwrite=args.overwrite,
                 output_format=args.infer_schema_format,
                 default_type=args.infer_schema_default_type,
+                infer_engine=args.infer_schema_engine,
                 unqualified_columns=args.infer_schema_unqualified_columns,
                 if_not_exists=args.infer_schema_if_not_exists,
                 create_schema=args.infer_schema_create_schema,
@@ -711,6 +739,10 @@ def run_split_statements(args: argparse.Namespace) -> int:
     _validate_error_strategy(args)
     if args.source:
         _validate_dialect(args.source, "source")
+    _validate_infer_engine(
+        infer_engine=args.infer_schema_engine,
+        flag_name="--infer-schema-engine",
+    )
     _validate_create_user_options(
         target=args.source,
         output_format=args.infer_schema_format,
@@ -822,6 +854,7 @@ def run_split_statements(args: argparse.Namespace) -> int:
                 overwrite=args.overwrite,
                 output_format=args.infer_schema_format,
                 default_type=args.infer_schema_default_type,
+                infer_engine=args.infer_schema_engine,
                 unqualified_columns=args.infer_schema_unqualified_columns,
                 if_not_exists=args.infer_schema_if_not_exists,
                 create_schema=args.infer_schema_create_schema,
@@ -883,6 +916,10 @@ def run_infer_schema(args: argparse.Namespace) -> int:
         return 2
 
     _validate_error_strategy(args)
+    _validate_infer_engine(
+        infer_engine=args.infer_engine,
+        flag_name="--infer-engine",
+    )
     if args.source:
         _validate_dialect(args.source, "source")
     if args.target:
@@ -943,6 +980,7 @@ def run_infer_schema(args: argparse.Namespace) -> int:
         default_type=args.default_type,
         unqualified_columns=args.unqualified_columns,
         fail_fast=args.fail_fast,
+        infer_engine=args.infer_engine,
     )
     all_errors.extend(result.errors)
     _validate_declared_oracle_schema_output(
@@ -1004,7 +1042,10 @@ def run_infer_schema(args: argparse.Namespace) -> int:
 
     if args.report:
         assert out_path is not None
-        report_path = _infer_schema_report_output_file(out_path)
+        report_path = _infer_schema_report_output_file(
+            out_path,
+            infer_engine=args.infer_engine,
+        )
         _write_infer_schema_markdown_report(
             path=report_path,
             command_text=args.invoked_command,
@@ -1273,6 +1314,7 @@ def _write_inferred_schema_artifact(
     overwrite: bool,
     output_format: str,
     default_type: str,
+    infer_engine: str,
     unqualified_columns: str,
     if_not_exists: bool,
     create_schema: bool,
@@ -1291,6 +1333,7 @@ def _write_inferred_schema_artifact(
         default_type=default_type,
         unqualified_columns=unqualified_columns,
         fail_fast=fail_fast,
+        infer_engine=infer_engine,
     )
     _validate_declared_oracle_schema_output(
         result=result,
@@ -1520,9 +1563,13 @@ def _split_report_output_file(out_path: Path) -> Path:
     return _artifact_output_dir(out_path) / f"{timestamp}-madsql-split-statements-report.md"
 
 
-def _infer_schema_report_output_file(out_path: Path) -> Path:
+def _infer_schema_report_output_file(out_path: Path, *, infer_engine: str) -> Path:
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    return _artifact_output_dir(out_path) / f"{timestamp}-madsql-infer-schema-report.md"
+    if infer_engine == "hybrid":
+        file_name = f"{timestamp}-madsql-infer-schema-hybrid.md"
+    else:
+        file_name = f"{timestamp}-madsql-infer-schema-report.md"
+    return _artifact_output_dir(out_path) / file_name
 
 
 def _error_report_output_file(error_report_arg: str, out_path: Path | None) -> Path:
@@ -1621,6 +1668,7 @@ def _write_infer_schema_log(
         f"source_dialect: {source or 'n/a'}",
         f"render_dialect: {render_dialect}",
         f"output_format: {output_format}",
+        f"infer_engine: {result.infer_engine}",
         *_log_version_lines(),
         f"inputs_processed: {input_count}",
         f"successes: {success_count}",
@@ -1631,6 +1679,9 @@ def _write_infer_schema_log(
         f"columns_inferred: {result.column_count}",
         f"low_confidence_columns: {low_confidence_columns}",
     ]
+
+    for engine_name, engine_count in sorted(result.engine_usage.items()):
+        lines.append(f"engine_usage_{engine_name}: {engine_count}")
 
     if verbosity == 1:
         lines.append("error_details:")
@@ -1686,6 +1737,7 @@ def _write_infer_schema_markdown_report(
         f"- Source Dialect: `{source or 'n/a'}`",
         f"- Render Dialect: `{render_dialect}`",
         f"- Output Format: `{output_format}`",
+        f"- Infer Engine: `{result.infer_engine}`",
         f"- Inputs Processed: `{input_count}`",
         f"- Successful Inputs: `{success_count}`",
         f"- Failed Inputs: `{failure_count}`",
@@ -1700,6 +1752,19 @@ def _write_infer_schema_markdown_report(
         "",
     ]
     lines.extend(_report_version_section())
+
+    if result.engine_usage:
+        lines.extend(
+            [
+                "## Engine Usage",
+                "",
+                "| Engine | Statements Contributed |",
+                "| --- | ---: |",
+            ]
+        )
+        for engine_name in sorted(result.engine_usage):
+            lines.append(f"| `{engine_name}` | {result.engine_usage[engine_name]} |")
+        lines.append("")
 
     if confidence_counts:
         lines.extend(
@@ -1754,6 +1819,12 @@ def _add_infer_schema_artifact_arguments(parser: argparse.ArgumentParser) -> Non
         ),
     )
     parser.add_argument(
+        "--infer-schema-engine",
+        choices=sorted(SUPPORTED_INFER_SCHEMA_ENGINES),
+        default="sqlglot",
+        help="Inference engine for --infer-schema artifacts: sqlglot only or hybrid SQLGlot + sql-metadata + simple-ddl-parser",
+    )
+    parser.add_argument(
         "--infer-schema-unqualified-columns",
         choices=["first-table", "skip"],
         default="first-table",
@@ -1783,6 +1854,21 @@ def _add_infer_schema_artifact_arguments(parser: argparse.ArgumentParser) -> Non
 def _validate_dialect(name: str, flag_name: str) -> None:
     if name not in Dialect.classes:
         raise FatalCliError(f"Unsupported {flag_name} dialect: {name}")
+
+
+def _validate_infer_engine(*, infer_engine: str, flag_name: str) -> None:
+    if infer_engine not in SUPPORTED_INFER_SCHEMA_ENGINES:
+        raise FatalCliError(f"Unsupported {flag_name} value: {infer_engine}")
+    if infer_engine != "hybrid":
+        return
+
+    missing_dependencies = missing_hybrid_infer_schema_dependencies()
+    if missing_dependencies:
+        missing_list = ", ".join(missing_dependencies)
+        raise FatalCliError(
+            f"{flag_name}=hybrid requires optional dependencies: {missing_list}. "
+            "Install with `pip install -e .[infer]` or `python3 -m pip install sql-metadata simple-ddl-parser`."
+        )
 
 
 def _validate_error_strategy(args: argparse.Namespace) -> None:
@@ -1869,11 +1955,14 @@ def _command_text(argv: list[str] | None) -> str:
 
 
 def _version_info() -> dict[str, str]:
+    optional_versions = optional_infer_schema_dependency_versions()
     return {
         "madsql": MADSQL_VERSION,
         "python": sys.version.split()[0],
         "sqlglot": SQLGLOT_VERSION,
         "sqlparse": sqlparse.__version__,
+        "sql_metadata": optional_versions["sql-metadata"],
+        "simple_ddl_parser": optional_versions["simple-ddl-parser"],
         "platform": platform.platform(),
     }
 
@@ -1886,6 +1975,8 @@ def _version_text() -> str:
             f"python {version_info['python']}",
             f"sqlglot {version_info['sqlglot']}",
             f"sqlparse {version_info['sqlparse']}",
+            f"sql-metadata {version_info['sql_metadata']}",
+            f"simple-ddl-parser {version_info['simple_ddl_parser']}",
             f"platform {version_info['platform']}",
         ]
     )
@@ -1898,6 +1989,8 @@ def _log_version_lines() -> list[str]:
         f"python_version: {version_info['python']}",
         f"sqlglot_version: {version_info['sqlglot']}",
         f"sqlparse_version: {version_info['sqlparse']}",
+        f"sql_metadata_version: {version_info['sql_metadata']}",
+        f"simple_ddl_parser_version: {version_info['simple_ddl_parser']}",
         f"platform: {version_info['platform']}",
     ]
 
@@ -1911,6 +2004,8 @@ def _report_version_section() -> list[str]:
         f"- Python: `{version_info['python']}`",
         f"- SQLGlot: `{version_info['sqlglot']}`",
         f"- SQLParse: `{version_info['sqlparse']}`",
+        f"- sql-metadata: `{version_info['sql_metadata']}`",
+        f"- simple-ddl-parser: `{version_info['simple_ddl_parser']}`",
         f"- Platform: `{version_info['platform']}`",
         "",
     ]
@@ -1999,6 +2094,8 @@ def _debug_version_summary() -> str:
         f"python={version_info['python']}, "
         f"sqlglot={version_info['sqlglot']}, "
         f"sqlparse={version_info['sqlparse']}, "
+        f"sql-metadata={version_info['sql_metadata']}, "
+        f"simple-ddl-parser={version_info['simple_ddl_parser']}, "
         f"platform={version_info['platform']}"
     )
 

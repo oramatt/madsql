@@ -9,8 +9,19 @@ import sqlparse
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError, TokenError
 from sqlglot.optimizer.scope import Scope, build_scope
+from importlib import metadata as importlib_metadata
 
 from madsql.errors import ConversionError
+
+try:
+    from simple_ddl_parser import DDLParser
+except ImportError:  # pragma: no cover - optional dependency
+    DDLParser = None
+
+try:
+    from sql_metadata import Parser as SQLMetadataParser
+except ImportError:  # pragma: no cover - optional dependency
+    SQLMetadataParser = None
 
 
 SUPPORTED_INFER_SCHEMA_STATEMENT_TYPES = {
@@ -26,6 +37,11 @@ SUPPORTED_INFER_SCHEMA_STATEMENT_TYPES = {
     "CREATE MATERIALIZED VIEW",
     "CREATE INDEX",
 }
+
+SUPPORTED_INFER_SCHEMA_ENGINES = {"sqlglot", "hybrid"}
+
+SQLGLOT_EXPLICIT_TYPE_WEIGHT = 100
+SIMPLE_DDL_PARSER_EXPLICIT_TYPE_WEIGHT = 10
 
 
 @dataclass(frozen=True)
@@ -55,6 +71,8 @@ class SchemaInferenceResult:
     tables: list[InferredTable]
     errors: list[ConversionError]
     statement_count: int
+    infer_engine: str = "sqlglot"
+    engine_usage: dict[str, int] = field(default_factory=dict)
     declared_schema_names: tuple[str, ...] = ()
     input_count: int = 0
     successful_input_count: int = 0
@@ -78,9 +96,9 @@ class _MutableColumn:
     def add_evidence(self, evidence: str) -> None:
         self.evidence_counts[evidence] += 1
 
-    def add_explicit_type(self, data_type: str | None) -> None:
+    def add_explicit_type(self, data_type: str | None, *, weight: int = 1) -> None:
         if data_type:
-            self.explicit_type_counts[data_type.upper()] += 1
+            self.explicit_type_counts[data_type.upper()] += weight
 
     def add_inferred_type(self, data_type: str | None) -> None:
         if data_type:
@@ -99,9 +117,9 @@ class _MutableColumn:
             )
 
         confidence = "high"
-        if self.evidence_counts.get("query_unqualified", 0):
+        if self.evidence_counts.get("query_unqualified", 0) or self.evidence_counts.get("query_sql_metadata_unqualified", 0):
             confidence = "low"
-        elif self.evidence_counts.get("query_single_source", 0):
+        elif self.evidence_counts.get("query_single_source", 0) or self.evidence_counts.get("query_sql_metadata", 0):
             confidence = "medium"
 
         return InferredColumn(
@@ -140,11 +158,15 @@ class _MutableTable:
 
 
 class _SchemaCollector:
-    def __init__(self, *, unqualified_columns: str) -> None:
+    def __init__(self, *, unqualified_columns: str, infer_engine: str) -> None:
+        if infer_engine not in SUPPORTED_INFER_SCHEMA_ENGINES:
+            raise ValueError(f"Unsupported infer-schema engine: {infer_engine}")
         self._tables: dict[tuple[str | None, str | None, str], _MutableTable] = {}
         self._declared_schema_names: set[str] = set()
         self.statement_count = 0
         self.unqualified_columns = unqualified_columns
+        self.infer_engine = infer_engine
+        self.engine_usage: Counter[str] = Counter()
 
     def add_sql(
         self,
@@ -164,11 +186,16 @@ class _SchemaCollector:
                 statement_index=statement_index,
             )
             if statement_error is not None:
+                if self._ingest_hybrid_fallback_statement(statement_sql, current_db=current_db):
+                    self.statement_count += 1
+                    continue
                 errors.append(statement_error)
                 if fail_fast:
                     break
                 continue
             if expression is None:
+                if self._ingest_hybrid_fallback_statement(statement_sql, current_db=current_db):
+                    self.statement_count += 1
                 continue
             statement_type = _infer_schema_statement_type(expression)
             if statement_type not in SUPPORTED_INFER_SCHEMA_STATEMENT_TYPES:
@@ -185,8 +212,14 @@ class _SchemaCollector:
                 if fail_fast:
                     break
                 continue
+            self.engine_usage["sqlglot"] += 1
             self.statement_count += 1
             current_db = self._ingest_expression(expression, current_db=current_db)
+            self._augment_with_hybrid_statement(
+                statement_sql,
+                current_db=current_db,
+                statement_type=statement_type,
+            )
 
         return errors
 
@@ -204,6 +237,136 @@ class _SchemaCollector:
     @property
     def declared_schema_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._declared_schema_names, key=str.lower))
+
+    @property
+    def rendered_engine_usage(self) -> dict[str, int]:
+        return dict(sorted(self.engine_usage.items()))
+
+    def _ingest_hybrid_fallback_statement(
+        self,
+        statement_sql: str,
+        *,
+        current_db: str | None,
+    ) -> bool:
+        if self.infer_engine != "hybrid":
+            return False
+
+        ddl_contributed = self._ingest_simple_ddl_parser(statement_sql, current_db=current_db)
+        metadata_contributed = self._ingest_sql_metadata(
+            statement_sql,
+            current_db=current_db,
+            allow_unqualified=True,
+        )
+        return ddl_contributed or metadata_contributed
+
+    def _augment_with_hybrid_statement(
+        self,
+        statement_sql: str,
+        *,
+        current_db: str | None,
+        statement_type: str,
+    ) -> None:
+        if self.infer_engine != "hybrid":
+            return
+
+        if statement_type == "CREATE TABLE":
+            self._ingest_simple_ddl_parser(statement_sql, current_db=current_db)
+
+        if statement_type in {
+            "SELECT",
+            "DELETE",
+            "INSERT",
+            "UPDATE",
+            "CREATE VIEW",
+            "CREATE MATERIALIZED VIEW",
+        }:
+            self._ingest_sql_metadata(
+                statement_sql,
+                current_db=current_db,
+                allow_unqualified=False,
+            )
+
+    def _ingest_simple_ddl_parser(
+        self,
+        statement_sql: str,
+        *,
+        current_db: str | None,
+    ) -> bool:
+        if DDLParser is None or not _looks_like_create_table(statement_sql):
+            return False
+
+        try:
+            parsed_tables = DDLParser(statement_sql).run()
+        except Exception:  # pragma: no cover - parser-specific failures are non-fatal
+            return False
+
+        contributed = False
+        for parsed_table in parsed_tables or []:
+            table_name = _canonicalize_identifier_name(parsed_table.get("table_name"))
+            if not table_name:
+                continue
+            schema_name = _canonicalize_identifier_name(parsed_table.get("schema")) or current_db
+            table = self._table_for_names(name=table_name, db=schema_name, catalog=None)
+            for parsed_column in parsed_table.get("columns", []):
+                column_name = _canonicalize_identifier_name(parsed_column.get("name"))
+                if not column_name:
+                    continue
+                column = table.column(column_name)
+                column.add_evidence("ddl_simple_ddl_parser")
+                column.add_explicit_type(
+                    _simple_ddl_column_type(parsed_column),
+                    weight=SIMPLE_DDL_PARSER_EXPLICIT_TYPE_WEIGHT,
+                )
+                contributed = True
+
+        if contributed:
+            self.engine_usage["simple-ddl-parser"] += 1
+        return contributed
+
+    def _ingest_sql_metadata(
+        self,
+        statement_sql: str,
+        *,
+        current_db: str | None,
+        allow_unqualified: bool,
+    ) -> bool:
+        if SQLMetadataParser is None:
+            return False
+
+        try:
+            parser = SQLMetadataParser(statement_sql)
+        except Exception:  # pragma: no cover - library parsing failures are non-fatal
+            return False
+
+        table_keys: list[tuple[str | None, str | None, str]] = []
+        for table_name in parser.tables:
+            catalog, db, name = _qualified_table_parts(table_name, current_db=current_db)
+            if not name:
+                continue
+            self._table_for_names(name=name, db=db, catalog=catalog)
+            table_keys.append((catalog, db, name))
+
+        if not table_keys:
+            return False
+
+        contributed = False
+        for column_ref in parser.columns:
+            resolved = _resolve_sql_metadata_column(
+                column_ref,
+                table_keys=table_keys,
+                current_db=current_db,
+                unqualified_columns=self.unqualified_columns,
+                allow_unqualified=allow_unqualified,
+            )
+            if resolved is None:
+                continue
+            table_key, column_name, evidence = resolved
+            self._tables[table_key].column(column_name).add_evidence(evidence)
+            contributed = True
+
+        if contributed:
+            self.engine_usage["sql-metadata"] += 1
+        return contributed
 
     def _ingest_expression(self, expression: exp.Expression, *, current_db: str | None) -> str | None:
         if isinstance(expression, exp.Use):
@@ -254,7 +417,10 @@ class _SchemaCollector:
             column.add_evidence("ddl")
             data_type = column_def.args.get("kind")
             if isinstance(data_type, exp.DataType):
-                column.add_explicit_type(data_type.sql())
+                column.add_explicit_type(
+                    data_type.sql(),
+                    weight=SQLGLOT_EXPLICIT_TYPE_WEIGHT,
+                )
 
     def _ingest_insert(self, expression: exp.Insert, *, current_db: str | None) -> None:
         schema = expression.this if isinstance(expression.this, exp.Schema) else None
@@ -503,17 +669,44 @@ class _SchemaCollector:
             self._tables[key] = _MutableTable(name=name, db=db, catalog=catalog)
         return self._tables[key]
 
+    def _table_for_names(
+        self,
+        *,
+        name: str,
+        db: str | None,
+        catalog: str | None,
+    ) -> _MutableTable:
+        key = self._normalized_table_key(catalog=catalog, db=db, name=name)
+        if key not in self._tables:
+            catalog, db, name = key
+            self._tables[key] = _MutableTable(name=name, db=db, catalog=catalog)
+        return self._tables[key]
+
     def _table_key(
         self,
         table_expression: exp.Table,
         *,
         current_db: str | None,
     ) -> tuple[str | None, str | None, str]:
-        catalog = _canonicalize_identifier_name(table_expression.catalog or None)
-        db = _canonicalize_identifier_name(table_expression.db or current_db or None)
-        name = _canonicalize_identifier_name(table_expression.name)
-        assert name is not None
-        return catalog, db, name
+        return self._normalized_table_key(
+            catalog=table_expression.catalog or None,
+            db=table_expression.db or current_db or None,
+            name=table_expression.name,
+        )
+
+    def _normalized_table_key(
+        self,
+        *,
+        catalog: str | None,
+        db: str | None,
+        name: str | None,
+    ) -> tuple[str | None, str | None, str]:
+        normalized_catalog = _canonicalize_identifier_name(catalog)
+        normalized_db = _canonicalize_identifier_name(db)
+        normalized_name = _canonicalize_identifier_name(name)
+        if normalized_name is None:
+            raise ValueError("Table name is required")
+        return normalized_catalog, normalized_db, normalized_name
 
 
 def infer_schema(
@@ -523,13 +716,19 @@ def infer_schema(
     path: Path | None,
     default_type: str,
     unqualified_columns: str,
+    infer_engine: str = "sqlglot",
 ) -> SchemaInferenceResult:
-    collector = _SchemaCollector(unqualified_columns=unqualified_columns)
+    collector = _SchemaCollector(
+        unqualified_columns=unqualified_columns,
+        infer_engine=infer_engine,
+    )
     errors = collector.add_sql(sql, source=source, path=path)
     return SchemaInferenceResult(
         tables=collector.render(default_type=default_type),
         errors=errors,
         statement_count=collector.statement_count,
+        infer_engine=infer_engine,
+        engine_usage=collector.rendered_engine_usage,
         declared_schema_names=collector.declared_schema_names,
         input_count=1,
         successful_input_count=0 if errors else 1,
@@ -543,8 +742,12 @@ def infer_schema_many(
     default_type: str,
     unqualified_columns: str,
     fail_fast: bool = False,
+    infer_engine: str = "sqlglot",
 ) -> SchemaInferenceResult:
-    collector = _SchemaCollector(unqualified_columns=unqualified_columns)
+    collector = _SchemaCollector(
+        unqualified_columns=unqualified_columns,
+        infer_engine=infer_engine,
+    )
     errors: list[ConversionError] = []
     input_count = 0
     successful_input_count = 0
@@ -560,6 +763,8 @@ def infer_schema_many(
         tables=collector.render(default_type=default_type),
         errors=errors,
         statement_count=collector.statement_count,
+        infer_engine=infer_engine,
+        engine_usage=collector.rendered_engine_usage,
         declared_schema_names=collector.declared_schema_names,
         input_count=input_count,
         successful_input_count=successful_input_count,
@@ -692,6 +897,8 @@ def _renderable_schema_names(
 
 def render_schema_json(result: SchemaInferenceResult) -> str:
     payload = {
+        "infer_engine": result.infer_engine,
+        "engine_usage": result.engine_usage,
         "statement_count": result.statement_count,
         "tables": [
             {
@@ -921,6 +1128,112 @@ def _canonicalize_identifier_name(value: str | None) -> str | None:
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
             return f"madsql_{candidate}"
     return value
+
+
+def missing_hybrid_infer_schema_dependencies() -> list[str]:
+    missing: list[str] = []
+    if SQLMetadataParser is None:
+        missing.append("sql-metadata")
+    if DDLParser is None:
+        missing.append("simple-ddl-parser")
+    return missing
+
+
+def optional_infer_schema_dependency_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for package_name in ("sql-metadata", "simple-ddl-parser"):
+        try:
+            versions[package_name] = importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            versions[package_name] = "not-installed"
+    return versions
+
+
+def _simple_ddl_column_type(parsed_column: dict[str, object]) -> str | None:
+    base_type = parsed_column.get("type")
+    if not isinstance(base_type, str) or not base_type:
+        return None
+
+    size = parsed_column.get("size")
+    if isinstance(size, tuple):
+        rendered_size = ",".join(str(part) for part in size)
+        return f"{base_type}({rendered_size})"
+    if isinstance(size, list):
+        rendered_size = ",".join(str(part) for part in size)
+        return f"{base_type}({rendered_size})"
+    if size not in (None, ""):
+        return f"{base_type}({size})"
+    return base_type
+
+
+def _qualified_table_parts(
+    value: str | None,
+    *,
+    current_db: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    normalized_value = _canonicalize_identifier_name(value)
+    if not normalized_value:
+        return None, _canonicalize_identifier_name(current_db), None
+
+    parts = [_canonicalize_identifier_name(part.strip("`\"[]")) for part in normalized_value.split(".")]
+    parts = [part for part in parts if part]
+    if not parts:
+        return None, _canonicalize_identifier_name(current_db), None
+    if len(parts) == 1:
+        return None, _canonicalize_identifier_name(current_db), parts[0]
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    catalog = ".".join(parts[:-2])
+    return catalog or None, parts[-2], parts[-1]
+
+
+def _resolve_sql_metadata_column(
+    column_ref: str,
+    *,
+    table_keys: list[tuple[str | None, str | None, str]],
+    current_db: str | None,
+    unqualified_columns: str,
+    allow_unqualified: bool,
+) -> tuple[tuple[str | None, str | None, str], str, str] | None:
+    normalized_ref = _canonicalize_identifier_name(column_ref)
+    if not normalized_ref:
+        return None
+
+    parts = [_canonicalize_identifier_name(part.strip("`\"[]")) for part in normalized_ref.split(".")]
+    parts = [part for part in parts if part]
+    if not parts:
+        return None
+
+    column_name = parts[-1]
+    if column_name == "*":
+        return None
+
+    if len(parts) == 1:
+        if not allow_unqualified:
+            return None
+        if len(table_keys) == 1:
+            return table_keys[0], column_name, "query_sql_metadata"
+        if unqualified_columns == "first-table" and table_keys:
+            return table_keys[0], column_name, "query_sql_metadata_unqualified"
+        return None
+
+    catalog, db, table_name = _qualified_table_parts(".".join(parts[:-1]), current_db=current_db)
+    if not table_name:
+        return None
+
+    exact_key = (catalog, db, table_name)
+    if exact_key in table_keys:
+        return exact_key, column_name, "query_sql_metadata"
+
+    suffix_matches = [
+        key
+        for key in table_keys
+        if key[2] == table_name and (db is None or key[1] == db)
+    ]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0], column_name, "query_sql_metadata"
+
+    return None
 
 
 def _literal_data_type(expression: exp.Expression | None) -> str | None:

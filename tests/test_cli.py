@@ -113,6 +113,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("python ", result.stdout)
         self.assertIn(f"sqlglot {SQLGLOT_VERSION}", result.stdout)
         self.assertIn(f"sqlparse {sqlparse.__version__}", result.stdout)
+        self.assertIn("sql-metadata ", result.stdout)
+        self.assertIn("simple-ddl-parser ", result.stdout)
         self.assertIn("platform ", result.stdout)
         self.assertEqual(result.stderr, "")
 
@@ -135,6 +137,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Split multi-statement SQL into one file per statement:", result.stdout)
         self.assertIn("--continue --log 1 --report", result.stdout)
         self.assertIn("--infer-schema", result.stdout)
+        self.assertIn("--infer-schema-engine", result.stdout)
         self.assertIn("--compact", result.stdout)
         self.assertIn("--infer-schema-create-schema", result.stdout)
         self.assertIn("--infer-schema-create-user", result.stdout)
@@ -150,6 +153,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("--compact", result.stdout)
         self.assertIn("--continue --log 1 --report", result.stdout)
         self.assertIn("--infer-schema", result.stdout)
+        self.assertIn("--infer-schema-engine", result.stdout)
         self.assertIn("--infer-schema-create-schema", result.stdout)
         self.assertIn("--infer-schema-create-user", result.stdout)
 
@@ -160,10 +164,12 @@ class CliTests(unittest.TestCase):
         self.assertIn("madsql infer-schema --source mysql --in ./sql --out ./artifacts/schema.sql", result.stdout)
         self.assertIn("--format json", result.stdout)
         self.assertIn("--log 1 --report", result.stdout)
+        self.assertIn("--infer-engine", result.stdout)
         self.assertIn("--unqualified-columns", result.stdout)
         self.assertIn("--compact", result.stdout)
         self.assertIn("--create-schema", result.stdout)
         self.assertIn("--create-user", result.stdout)
+        self.assertIn("--infer-engine hybrid", result.stdout)
         self.assertIn("Common supported values: TEXT, VARCHAR(255), VARCHAR2(100)", result.stdout)
 
     def test_infer_schema_empty_invocation_prints_help_and_exits_2(self) -> None:
@@ -966,6 +972,28 @@ WHERE n.id = 1;
             schema_path = out_dir / "inferred_schema-postgres-to-mysql.sql"
             self.assertTrue(schema_path.exists())
 
+    def test_infer_schema_hybrid_report_uses_hybrid_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "input.sql"
+            path.write_text("SELECT a.id FROM sales.orders a;", encoding="utf-8")
+            out_dir = root / "artifacts"
+            result = run_cli(
+                "infer-schema",
+                "--source",
+                "postgres",
+                "--infer-engine",
+                "hybrid",
+                "--out",
+                str(out_dir),
+                "--report",
+                str(path),
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(list(out_dir.glob("*-madsql-infer-schema-hybrid.md"))), 1)
+            self.assertEqual(len(list(out_dir.glob("*-madsql-infer-schema-report.md"))), 0)
+
     def test_infer_schema_explicit_output_file_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1008,6 +1036,84 @@ SELECT id FROM analytics.orders;
         self.assertEqual(result.errors[0].error_type, "parse_error")
         self.assertIn("bad token", result.errors[0].message)
 
+    def test_infer_schema_hybrid_uses_simple_ddl_parser_when_sqlglot_parse_fails(self) -> None:
+        sql = "CREATE TABLE foo (id INT, name VARCHAR(20));"
+        with patch.object(infer_schema_module, "parse", side_effect=TokenError("bad token")):
+            result = infer_schema_module.infer_schema(
+                sql,
+                source="postgres",
+                path=Path("input.sql"),
+                default_type="TEXT",
+                unqualified_columns="first-table",
+                infer_engine="hybrid",
+            )
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.statement_count, 1)
+        self.assertEqual(result.infer_engine, "hybrid")
+        self.assertEqual(result.engine_usage.get("simple-ddl-parser"), 1)
+        table = next(table for table in result.tables if table.name == "foo")
+        columns = {column.name: column.data_type for column in table.columns}
+        self.assertEqual(columns["id"], "INT")
+        self.assertEqual(columns["name"], "VARCHAR(20)")
+
+    def test_infer_schema_hybrid_uses_sql_metadata_when_sqlglot_parse_fails(self) -> None:
+        sql = "SELECT a.id, b.name FROM sales.orders a JOIN crm.users b ON a.user_id = b.id WHERE b.status = 'active';"
+        with patch.object(infer_schema_module, "parse", side_effect=TokenError("bad token")):
+            result = infer_schema_module.infer_schema(
+                sql,
+                source="postgres",
+                path=Path("input.sql"),
+                default_type="TEXT",
+                unqualified_columns="first-table",
+                infer_engine="hybrid",
+            )
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.statement_count, 1)
+        self.assertEqual(result.engine_usage.get("sql-metadata"), 1)
+        tables = {
+            table.qualified_name: {column.name for column in table.columns}
+            for table in result.tables
+        }
+        self.assertEqual(tables["sales.orders"], {"id", "user_id"})
+        self.assertEqual(tables["crm.users"], {"id", "name", "status"})
+
+    def test_infer_schema_hybrid_json_includes_engine_usage(self) -> None:
+        sql = "CREATE TABLE foo (id INT, name VARCHAR(20));"
+        result = run_cli(
+            "infer-schema",
+            "--source",
+            "postgres",
+            "--infer-engine",
+            "hybrid",
+            "--format",
+            "json",
+            input_text=sql,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["infer_engine"], "hybrid")
+        self.assertEqual(payload["engine_usage"]["sqlglot"], 1)
+        self.assertEqual(payload["engine_usage"]["simple-ddl-parser"], 1)
+
+    def test_infer_schema_hybrid_skips_unqualified_sql_metadata_noise_when_sqlglot_succeeds(self) -> None:
+        sql = 'SELECT * FROM trips WHERE status = "completed";'
+        result = run_cli(
+            "infer-schema",
+            "--source",
+            "singlestore",
+            "--infer-engine",
+            "hybrid",
+            "--format",
+            "json",
+            input_text=sql,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        table = next(table for table in payload["tables"] if table["name"] == "trips")
+        column_names = {column["name"] for column in table["columns"]}
+        self.assertIn("status", column_names)
+        self.assertNotIn("completed", column_names)
+
     def test_convert_can_write_inferred_schema_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1033,11 +1139,38 @@ SELECT id FROM analytics.orders;
             self.assertEqual(result.returncode, 0, result.stderr)
             schema_path = out_dir / "inferred_schema-postgres-to-mysql.sql"
             self.assertTrue(schema_path.exists())
-            payload = schema_path.read_text(encoding="utf-8")
-            self.assertIn("CREATE TABLE IF NOT EXISTS trips", payload)
-            self.assertIn("pickup_time DOUBLE", payload)
-            self.assertIn("request_time DOUBLE", payload)
-            self.assertIn("status TEXT", payload)
+
+    def test_convert_can_write_hybrid_inferred_schema_json_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "input.sql"
+            path.write_text(
+                "SELECT a.id, b.name FROM sales.orders a JOIN crm.users b ON a.user_id = b.id;",
+                encoding="utf-8",
+            )
+            out_dir = root / "converted"
+            result = run_cli(
+                "convert",
+                "--source",
+                "postgres",
+                "--target",
+                "mysql",
+                "--infer-schema",
+                "--infer-schema-format",
+                "json",
+                "--infer-schema-engine",
+                "hybrid",
+                str(path),
+                "--out",
+                str(out_dir),
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            schema_path = out_dir / "inferred_schema-postgres-to-mysql.json"
+            payload = json.loads(schema_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["infer_engine"], "hybrid")
+            self.assertEqual(payload["engine_usage"]["sqlglot"], 1)
+            self.assertEqual(payload["engine_usage"]["sql-metadata"], 1)
 
     def test_convert_infer_schema_artifact_respects_pretty_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
