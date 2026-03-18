@@ -163,6 +163,7 @@ madsql infer-schema \
   --report
 ```
 
+- Included in the standard install.
 - SQLGlot stays primary.
 - `sql-metadata` supplements query metadata.
 - `simple-ddl-parser` supplements `CREATE TABLE` extraction.

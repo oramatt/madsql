@@ -19,6 +19,9 @@ pip install -U pip
 pip install -e .
 ```
 
+Hybrid `infer-schema` support with `sql-metadata` and `simple-ddl-parser`
+is included in the standard install.
+
 Verify the runtime:
 
 ```bash
@@ -205,7 +208,7 @@ Artifact tuning options for this workflow include:
 
 `--infer-schema-engine hybrid` keeps SQLGlot as the primary inference engine
 and supplements the side artifact with `sql-metadata` and
-`simple-ddl-parser`. Hybrid mode requires `pip install -e .[infer]`.
+`simple-ddl-parser`. Hybrid mode is included in the standard install.
 
 ## Chapter 3: Convert
 
@@ -358,7 +361,7 @@ madsql convert \
 ```
 
 This uses the same hybrid inference strategy as standalone `infer-schema` and
-requires `pip install -e .[infer]`.
+is included in the standard install.
 
 ### Safe Batch Execution
 
@@ -493,7 +496,7 @@ madsql infer-schema --source postgres --infer-engine hybrid ./queries.sql
 
 Use hybrid mode when the workload mixes normal SQLGlot-friendly SQL with DDL
 or metadata-only statements that still contain useful table and column
-signals. Hybrid mode requires `pip install -e .[infer]`.
+signals. Hybrid mode is included in the standard install.
 
 ### Tuning Inference
 

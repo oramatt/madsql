@@ -34,6 +34,8 @@ pip install -e .
 ```
 
 After installation, the `madsql` command is available as a console script.
+Hybrid `infer-schema` support with `sql-metadata` and `simple-ddl-parser`
+is included in the standard install.
 
 
 ------------------------------------------------------------------------
@@ -408,7 +410,7 @@ madsql infer-schema --source postgres --in ./sql --out ./artifacts/schema.sql --
 -   `--if-not-exists`
 -   `--pretty|--compact` for DDL output
 -   `--infer-engine hybrid` keeps SQLGlot as the primary parser and supplements it with `sql-metadata` for query metadata and `simple-ddl-parser` for DDL extraction.
--   Hybrid inference requires `pip install -e .[infer]` or direct installation of `sql-metadata` and `simple-ddl-parser`.
+-   Hybrid inference is included in the standard `madsql` install.
 -   Inputs are split statement-by-statement and parsed individually so malformed later statements do not discard earlier inferred schema.
 -   Common dashboard-style constructs such as `IN ()`, doubled quoted aliases, `${...}`, and `$name` placeholders are normalized during fallback parsing so more real-world SQL can still be inferred.
 -   Input `CREATE SCHEMA` and `CREATE DATABASE` statements render directly in DDL output. For Oracle targets they are emitted as `CREATE USER` plus grants and require `--create-user-password`.
@@ -655,7 +657,7 @@ flowchart TD
   IB -->|yes| ID["Expand files, directories, and globs<br/>Sort deterministically"]
   IC --> IE["Split into statements with sqlparse boundaries<br/>Parse each statement with SQLGlot<br/>Apply fallback normalization for common template SQL"]
   ID --> IE
-  IE --> IF["Use --infer-engine sqlglot or hybrid<br/>Hybrid keeps SQLGlot primary and supplements inference with<br/>sql-metadata and simple-ddl-parser when available"]
+  IE --> IF["Use --infer-engine sqlglot or hybrid<br/>Hybrid keeps SQLGlot primary and supplements inference with<br/>sql-metadata and simple-ddl-parser from the standard install"]
   IF --> IG["Support USE, SELECT, DELETE, INSERT, UPDATE,<br/>CREATE TABLE/VIEW/MATERIALIZED VIEW/INDEX,<br/>CREATE SCHEMA, and CREATE DATABASE"]
   IG --> IH["Infer tables, columns, declared schema names,<br/>and best-effort types<br/>Record parse and unsupported-statement errors with SQL text"]
   IH --> IHA["Render compact DDL by default,<br/>pretty DDL with --pretty,<br/>or JSON with --format json<br/>Oracle can emit CREATE USER and GRANT from schema declarations"]

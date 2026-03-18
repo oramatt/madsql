@@ -296,7 +296,8 @@ Examples:
 Notes:
   - Query-only inputs infer table structure heuristically.
   - Low-confidence columns are noted in DDL comments and JSON output.
-  - --infer-engine hybrid requires sql-metadata and simple-ddl-parser.
+  - --infer-engine hybrid uses the standard madsql install, including
+    sql-metadata and simple-ddl-parser.
   - Fatal CLI misuse exits with code 2. Parse/read errors exit with code 1.
 """.format(common_default_type_values=COMMON_DEFAULT_TYPE_VALUES)
 
@@ -1866,8 +1867,9 @@ def _validate_infer_engine(*, infer_engine: str, flag_name: str) -> None:
     if missing_dependencies:
         missing_list = ", ".join(missing_dependencies)
         raise FatalCliError(
-            f"{flag_name}=hybrid requires optional dependencies: {missing_list}. "
-            "Install with `pip install -e .[infer]` or `python3 -m pip install sql-metadata simple-ddl-parser`."
+            f"{flag_name}=hybrid requires installed dependencies: {missing_list}. "
+            "These are part of the standard madsql install. Reinstall madsql or run "
+            "`python3 -m pip install sql-metadata simple-ddl-parser`."
         )
 
 
