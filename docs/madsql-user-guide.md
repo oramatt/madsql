@@ -19,13 +19,6 @@ pip install -U pip
 pip install -e .
 ```
 
-If you plan to use hybrid schema inference with `sql-metadata` and
-`simple-ddl-parser`, install the optional infer extras:
-
-```bash
-pip install -e .[infer]
-```
-
 Verify the runtime:
 
 ```bash
