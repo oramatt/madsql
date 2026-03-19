@@ -38,7 +38,7 @@ Hybrid `infer-schema` support with `sql-metadata` and `simple-ddl-parser`
 is included in the standard install.
 
 ------------------------------------------------------------------------
-
+<!--
 ## Binary Releases
 
 GitHub Actions builds native release archives for:
@@ -70,7 +70,7 @@ directory before running the binary:
 ``` bash
 xattr -rd com.apple.quarantine ./madsql
 ```
-
+-->
 
 ------------------------------------------------------------------------
 
