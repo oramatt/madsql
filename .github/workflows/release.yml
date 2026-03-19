@@ -98,7 +98,7 @@ jobs:
           pyinstaller_args=(
             --noconfirm
             --clean
-            --onefile
+            --onedir
             --name "${APP_NAME}"
             --paths src
             --collect-all sqlglot
@@ -115,21 +115,21 @@ jobs:
       - name: Smoke test binary
         shell: bash
         run: |
-          "./dist/${{ matrix.binary_name }}" --version
-          "./dist/${{ matrix.binary_name }}" dialects >/dev/null
+          "./dist/${APP_NAME}/${{ matrix.binary_name }}" --version
+          "./dist/${APP_NAME}/${{ matrix.binary_name }}" dialects >/dev/null
 
       - name: Archive binary (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          tar -C dist -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "${{ matrix.binary_name }}"
+          tar -C dist -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "${APP_NAME}"
           shasum -a 256 "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" > "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz.sha256"
 
       - name: Archive binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -LiteralPath "dist\${{ matrix.binary_name }}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
+          Compress-Archive -LiteralPath "dist\${env:APP_NAME}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
           $hash = (Get-FileHash "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ steps.meta.outputs.archive_name }}.zip" | Set-Content -NoNewline "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip.sha256"
 

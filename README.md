@@ -37,6 +37,40 @@ After installation, the `madsql` command is available as a console script.
 Hybrid `infer-schema` support with `sql-metadata` and `simple-ddl-parser`
 is included in the standard install.
 
+------------------------------------------------------------------------
+
+## Binary Releases
+
+GitHub Actions builds native release archives for:
+
+- `macOS x86_64`
+- `macOS arm64`
+- `Windows x86_64`
+- `Windows arm64`
+- `Linux x86_64`
+- `Linux arm64`
+
+After extracting a release asset, run the executable inside the unpacked
+directory. For example on Unix-like systems:
+
+``` bash
+./madsql --version
+```
+
+On macOS, a downloaded release may be marked with Apple quarantine
+attributes. To inspect them:
+
+``` bash
+xattr -lr ./madsql
+```
+
+If needed, remove the quarantine attribute from the unpacked release
+directory before running the binary:
+
+``` bash
+xattr -rd com.apple.quarantine ./madsql
+```
+
 
 ------------------------------------------------------------------------
 
