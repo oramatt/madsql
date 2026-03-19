@@ -5,6 +5,15 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      bundle_mode:
+        description: "Nuitka packaging mode"
+        required: true
+        default: "onefile"
+        type: choice
+        options:
+          - onefile
+          - standalone
 
 permissions:
   contents: write
@@ -16,7 +25,6 @@ concurrency:
 env:
   APP_NAME: madsql
   PYTHON_VERSION: "3.12"
-  PYINSTALLER_VERSION: "6.17.0"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
@@ -32,37 +40,31 @@ jobs:
             python_arch: x64
             binary_name: madsql
             archive_ext: tar.gz
-            pyinstaller_target_arch: ""
           - runner: ubuntu-24.04-arm
             target: linux-arm64
             python_arch: arm64
             binary_name: madsql
             archive_ext: tar.gz
-            pyinstaller_target_arch: ""
           - runner: windows-2025
             target: windows-x86_64
             python_arch: x64
             binary_name: madsql.exe
             archive_ext: zip
-            pyinstaller_target_arch: ""
           - runner: windows-11-arm
             target: windows-arm64
             python_arch: arm64
             binary_name: madsql.exe
             archive_ext: zip
-            pyinstaller_target_arch: ""
           - runner: macos-15-intel
             target: macos-x86_64
             python_arch: x64
             binary_name: madsql
             archive_ext: tar.gz
-            pyinstaller_target_arch: x86_64
           - runner: macos-15
             target: macos-arm64
             python_arch: arm64
             binary_name: madsql
             archive_ext: tar.gz
-            pyinstaller_target_arch: arm64
 
     steps:
       - uses: actions/checkout@v5
@@ -77,12 +79,21 @@ jobs:
         id: meta
         shell: bash
         run: |
+          requested_mode="${{ github.event.inputs.bundle_mode }}"
+
+          if [[ -n "${requested_mode}" ]]; then
+            build_mode="${requested_mode}"
+          else
+            build_mode="onefile"
+          fi
+
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             release_tag="${GITHUB_REF_NAME}"
           else
             release_tag="manual-${GITHUB_RUN_NUMBER}"
           fi
-          archive_name="${APP_NAME}-${release_tag}-${{ matrix.target }}"
+          archive_name="${APP_NAME}-${release_tag}-${{ matrix.target }}-nuitka-${build_mode}"
+          echo "build_mode=${build_mode}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
           echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
 
@@ -90,48 +101,86 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . "pyinstaller==${PYINSTALLER_VERSION}"
+          python -m pip install . Nuitka zstandard
+          python -m nuitka --version
 
-      - name: Build standalone binary
+      - name: Build Nuitka binary
         shell: bash
         run: |
-          pyinstaller_args=(
-            --noconfirm
-            --clean
-            --onedir
-            --name "${APP_NAME}"
-            --paths src
-            --collect-all sqlglot
-            --collect-all sqlparse
-            src/madsql/__main__.py
+          build_dir="build/nuitka/${{ matrix.target }}"
+          mkdir -p "${build_dir}"
+
+          nuitka_args=(
+            --assume-yes-for-downloads
+            --output-dir="${build_dir}"
+            --output-filename="${{ matrix.binary_name }}"
+            --python-flag=safe_path
           )
 
-          if [[ -n "${{ matrix.pyinstaller_target_arch }}" ]]; then
-            pyinstaller_args+=(--target-arch "${{ matrix.pyinstaller_target_arch }}")
+          if [[ "${{ steps.meta.outputs.build_mode }}" == "standalone" ]]; then
+            nuitka_args+=(--mode=standalone)
+          else
+            nuitka_args+=(--mode=onefile)
           fi
 
-          python -m PyInstaller "${pyinstaller_args[@]}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            nuitka_args+=(--msvc=latest)
+          fi
+
+          python -m nuitka "${nuitka_args[@]}" src/madsql/__main__.py
+
+      - name: Resolve bundle paths
+        id: bundle
+        shell: bash
+        run: |
+          build_dir="build/nuitka/${{ matrix.target }}"
+
+          if [[ "${{ steps.meta.outputs.build_mode }}" == "standalone" ]]; then
+            bundle_path="$(find "${build_dir}" -maxdepth 1 -type d -name '*.dist' | head -n 1)"
+          else
+            bundle_path="$(find "${build_dir}" -maxdepth 1 -type f \( -name "${{ matrix.binary_name }}" -o -name "${APP_NAME}" -o -name "${APP_NAME}.bin" -o -name "${APP_NAME}.exe" \) | head -n 1)"
+          fi
+
+          [[ -n "${bundle_path}" ]] || {
+            printf 'No Nuitka bundle found in %s\n' "${build_dir}" >&2
+            exit 1
+          }
+
+          if [[ "${{ steps.meta.outputs.build_mode }}" == "standalone" ]]; then
+            executable_path="$(find "${bundle_path}" -maxdepth 1 -type f \( -name "${{ matrix.binary_name }}" -o -name "${APP_NAME}" -o -name "${APP_NAME}.bin" -o -name "${APP_NAME}.exe" \) | head -n 1)"
+          else
+            executable_path="${bundle_path}"
+          fi
+
+          [[ -n "${executable_path}" ]] || {
+            printf 'No executable found in %s\n' "${bundle_path}" >&2
+            exit 1
+          }
+
+          echo "bundle_path=${bundle_path}" >> "${GITHUB_OUTPUT}"
+          echo "executable_path=${executable_path}" >> "${GITHUB_OUTPUT}"
 
       - name: Smoke test binary
         shell: bash
         run: |
-          "./dist/${APP_NAME}/${{ matrix.binary_name }}" --version
-          "./dist/${APP_NAME}/${{ matrix.binary_name }}" dialects >/dev/null
+          "${{ steps.bundle.outputs.executable_path }}" --version
+          "${{ steps.bundle.outputs.executable_path }}" dialects >/dev/null
 
       - name: Archive binary (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          tar -C dist -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "${APP_NAME}"
+          bundle_path="${{ steps.bundle.outputs.bundle_path }}"
+          tar -C "$(dirname "${bundle_path}")" -czf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" "$(basename "${bundle_path}")"
           shasum -a 256 "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz" > "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.tar.gz.sha256"
 
       - name: Archive binary (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          Compress-Archive -LiteralPath "dist\${env:APP_NAME}" -DestinationPath "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Force
-          $hash = (Get-FileHash "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  ${{ steps.meta.outputs.archive_name }}.zip" | Set-Content -NoNewline "$env:RUNNER_TEMP\${{ steps.meta.outputs.archive_name }}.zip.sha256"
+          bundle_path="${{ steps.bundle.outputs.bundle_path }}"
+          tar -a -C "$(dirname "${bundle_path}")" -cf "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.zip" "$(basename "${bundle_path}")"
+          sha256sum "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.zip" > "${RUNNER_TEMP}/${{ steps.meta.outputs.archive_name }}.zip.sha256"
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v6
