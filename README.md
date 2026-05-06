@@ -1,5 +1,5 @@
 # madsql🤬
-
+![Domain](https://img.shields.io/badge/domain-database_migrations-orange)
 madsql is a deterministic command-line tool for converting SQL scripts
 between dialects, splitting multi-statement SQL, and inferring
 creation DDL from SQL workloads using SQLGlot.
